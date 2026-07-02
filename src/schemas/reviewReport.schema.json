@@ -1,0 +1,171 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://butler.local/schemas/review-report.schema.json",
+  "title": "ReviewReport",
+  "type": "object",
+  "required": ["meta", "issues", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["target_sp_hash", "skills_run", "models_used", "timestamp"],
+      "additionalProperties": false,
+      "properties": {
+        "target_sp_hash": {
+          "type": "string",
+          "description": "target_sp 内容的哈希值，用于校验应用 fix 时 SP 未被并发修改"
+        },
+        "skills_run": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "本次审查实际加载执行的 skill_id 列表"
+        },
+        "models_used": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "review_duration_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/Issue" }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["overall_score", "issue_count_by_severity", "issue_count_by_category"],
+      "additionalProperties": false,
+      "properties": {
+        "overall_score": { "type": "number", "minimum": 0, "maximum": 100 },
+        "issue_count_by_severity": {
+          "type": "object",
+          "required": ["critical", "major", "minor", "info"],
+          "additionalProperties": false,
+          "properties": {
+            "critical": { "type": "integer", "minimum": 0 },
+            "major": { "type": "integer", "minimum": 0 },
+            "minor": { "type": "integer", "minimum": 0 },
+            "info": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "issue_count_by_category": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "engineering_contract": { "type": "integer", "minimum": 0 },
+            "instruction_quality": { "type": "integer", "minimum": 0 },
+            "structure": { "type": "integer", "minimum": 0 },
+            "io_contract": { "type": "integer", "minimum": 0 },
+            "robustness": { "type": "integer", "minimum": 0 },
+            "quality_control": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "Issue": {
+      "type": "object",
+      "required": [
+        "id", "skill_id", "category", "severity", "confidence",
+        "consensus", "vote", "location", "description", "fix"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "skill_id": { "type": "string" },
+        "category": {
+          "type": "string",
+          "enum": [
+            "engineering_contract", "instruction_quality", "structure",
+            "io_contract", "robustness", "quality_control"
+          ]
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "major", "minor", "info"]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "该判断本身的置信度，不代表问题严重性"
+        },
+        "execution_mode": {
+          "type": "string",
+          "enum": ["static_check", "llm_judge", "hybrid"]
+        },
+        "domain_specific": {
+          "type": "boolean",
+          "default": false,
+          "description": "该 issue 来自领域 skill。UI 层不应对领域 skill 的 single_model_flag 自动降权"
+        },
+        "consensus": {
+          "type": "string",
+          "enum": ["confirmed", "single_model_flag", "static_check_deterministic"]
+        },
+        "vote": {
+          "type": "object",
+          "required": ["models_flagged", "models_passed"],
+          "additionalProperties": false,
+          "properties": {
+            "models_flagged": { "type": "array", "items": { "type": "string" } },
+            "models_passed": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "location": {
+          "type": "object",
+          "required": ["anchor_before", "anchor_after", "ambiguous"],
+          "additionalProperties": false,
+          "properties": {
+            "anchor_before": { "type": "string" },
+            "anchor_after": { "type": "string" },
+            "matched_text": { "type": "string" },
+            "line_range": {
+              "type": "array",
+              "items": { "type": "integer" },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "ambiguous": {
+              "type": "boolean",
+              "description": "true 表示该锚点在原文中匹配到多处，禁止自动应用 fix，必须人工确认具体位置"
+            }
+          }
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "fix": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/definitions/Fix" }
+          ]
+        }
+      }
+    },
+    "Fix": {
+      "type": "object",
+      "required": ["action", "fix_requires_review"],
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "text_replace", "text_insert", "text_delete",
+            "config_change", "constraint_removal", "constraint_add",
+            "schema_add_field", "reorder_section"
+          ]
+        },
+        "target": { "type": "string" },
+        "from": {},
+        "to": {},
+        "content": { "type": "string" },
+        "fix_requires_review": {
+          "type": "boolean",
+          "const": true,
+          "description": "强制为 true。任何 fix 落地前必须经过人工确认，禁止静默自动应用"
+        }
+      }
+    }
+  }
+}
