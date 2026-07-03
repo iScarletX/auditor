@@ -8,6 +8,7 @@ export interface ReviewHistoryRecord {
   createdAt: string
   title: string
   targetSp: string
+  scenarioHint?: string
   report: ReviewReport
 }
 

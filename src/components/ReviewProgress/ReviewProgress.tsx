@@ -7,10 +7,17 @@ interface ReviewProgressProps {
   total: number
 }
 
+function phaseLabel(phase: ReviewProgressEvent['phase']) {
+  if (phase === 'consolidation') return '汇总复核'
+  if (phase === 'complete') return '完成'
+  return 'Skill 检查'
+}
+
 export function ReviewProgress({ running, events, total }: ReviewProgressProps) {
   const latest = events.at(-1)
   const completed = latest?.completed ?? 0
-  const percent = total === 0 ? 0 : Math.round((completed / total) * 100)
+  const progressTotal = latest?.total ?? total
+  const percent = progressTotal === 0 ? 0 : Math.round((completed / progressTotal) * 100)
   const errors = latest?.errors ?? []
 
   return (
@@ -21,7 +28,7 @@ export function ReviewProgress({ running, events, total }: ReviewProgressProps) 
           <h2 className="text-sm font-semibold text-slate-950">审查进度</h2>
         </div>
         <span className="text-xs text-slate-500">
-          {completed}/{total}
+          {completed}/{progressTotal}
         </span>
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-slate-100">
@@ -32,9 +39,9 @@ export function ReviewProgress({ running, events, total }: ReviewProgressProps) 
           <p className="text-sm text-slate-500">等待开始审查</p>
         ) : (
           events.map((event) => (
-            <div key={`${event.skillId}-${event.completed}`} className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700">
-              <span className="font-medium text-slate-900">{event.skillTitle}</span>
-              <span> 完成，新增 {event.issues.length} 个问题</span>
+            <div key={`${event.phase}-${event.skillId}-${event.completed}`} className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700">
+              <span className="font-medium text-slate-900">{phaseLabel(event.phase)}：</span>
+              <span>{event.skillTitle} 完成，新增 {event.issues.filter((issue) => issue.status === 'found').length} 个问题</span>
             </div>
           ))
         )}

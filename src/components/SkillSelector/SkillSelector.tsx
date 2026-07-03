@@ -1,8 +1,10 @@
 import { ListChecks } from 'lucide-react'
-import type { SkillDefinition } from '../../types/reviewReport.types'
+import { detectSkillConflicts } from '../../core/skillLoader/skillConflictDetector'
+import type { IssueCategory, SkillDefinition } from '../../types/reviewReport.types'
+import { SkillConflictWarning } from '../SkillConflictWarning/SkillConflictWarning'
+import { SkillEditor } from '../SkillEditor/SkillEditor'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
-import { SkillEditor } from '../SkillEditor/SkillEditor'
 
 interface SkillSelectorProps {
   skills: SkillDefinition[]
@@ -12,10 +14,30 @@ interface SkillSelectorProps {
   onSkillAdded: (skill: SkillDefinition) => void
 }
 
-const groupLabels: Record<SkillDefinition['source'], string> = {
-  universal: '通用 Skill',
-  domain: '领域 Skill',
-  user: '用户 Skill',
+const categoryOrder: IssueCategory[] = [
+  'clarity',
+  'contract',
+  'resource',
+  'interop',
+  'robustness',
+  'quality',
+  'compliance',
+]
+
+const categoryLabels: Record<IssueCategory, string> = {
+  clarity: '清晰度与一致性',
+  contract: '输入输出契约',
+  resource: '资源与执行',
+  interop: '兼容性',
+  robustness: '稳健性与安全',
+  quality: '质量控制',
+  compliance: '合规',
+}
+
+const sourceLabels: Record<SkillDefinition['source'], string> = {
+  universal: '通用',
+  domain: '领域',
+  user: '自定义',
 }
 
 function modeLabel(mode: SkillDefinition['execution_mode']) {
@@ -31,10 +53,11 @@ export function SkillSelector({
   onReplaceSelection,
   onSkillAdded,
 }: SkillSelectorProps) {
-  const groups = (['universal', 'domain', 'user'] as const).map((source) => ({
-    source,
-    items: skills.filter((skill) => skill.source === source),
+  const groups = categoryOrder.map((category) => ({
+    category,
+    items: skills.filter((skill) => skill.category === category),
   }))
+  const conflicts = detectSkillConflicts(skills, selectedIds)
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4">
@@ -46,12 +69,27 @@ export function SkillSelector({
         <Badge>{selectedIds.size} 已选</Badge>
       </div>
 
-      <div className="space-y-5">
+      <div className="mb-3 flex gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={() => onReplaceSelection(skills.filter((skill) => skill.source === 'universal').map((skill) => skill.id))}
+        >
+          全选通用
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => onReplaceSelection([])}>
+          清空
+        </Button>
+      </div>
+
+      <div className="space-y-4">
+        <SkillConflictWarning conflicts={conflicts} />
         {groups.map((group) => (
-          <div key={group.source} className="space-y-2">
+          <div key={group.category} className="space-y-2">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                {groupLabels[group.source]}
+                {categoryLabels[group.category]}
               </h3>
               {group.items.length > 0 ? (
                 <Button
@@ -61,13 +99,13 @@ export function SkillSelector({
                   onClick={() => {
                     const groupIds = group.items.map((skill) => skill.id)
                     const others = skills
-                      .filter((skill) => skill.source !== group.source && selectedIds.has(skill.id))
+                      .filter((skill) => skill.category !== group.category && selectedIds.has(skill.id))
                       .map((skill) => skill.id)
                     const allSelected = groupIds.every((id) => selectedIds.has(id))
                     onReplaceSelection(allSelected ? others : [...others, ...groupIds])
                   }}
                 >
-                  {group.items.every((skill) => selectedIds.has(skill.id)) ? '取消本组' : '选择本组'}
+                  {group.items.every((skill) => selectedIds.has(skill.id)) ? '取消本类' : '选择本类'}
                 </Button>
               ) : null}
             </div>
@@ -94,7 +132,7 @@ export function SkillSelector({
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-sm font-medium text-slate-900">{skill.title}</span>
                           <Badge>{modeLabel(skill.execution_mode)}</Badge>
-                          {skill.domain_specific ? <Badge className="bg-sky-50 text-sky-700">领域</Badge> : null}
+                          <Badge>{sourceLabels[skill.source]}</Badge>
                         </div>
                         <p className="mt-1 text-xs leading-5 text-slate-600">{skill.description}</p>
                       </div>

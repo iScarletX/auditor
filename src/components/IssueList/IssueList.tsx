@@ -1,15 +1,19 @@
 import { useMemo, useState } from 'react'
 import type { Issue, IssueSeverity } from '../../types/reviewReport.types'
-import { Button } from '../ui/Button'
 import { IssueCard } from '../IssueCard/IssueCard'
+import { Button } from '../ui/Button'
 
 interface IssueListProps {
   issues: Issue[]
   onPreviewFix: (issue: Issue) => void
 }
 
-const filters: Array<{ id: IssueSeverity | 'all'; label: string }> = [
+type IssueFilter = IssueSeverity | 'all' | 'found' | 'not_applicable'
+
+const filters: Array<{ id: IssueFilter; label: string }> = [
   { id: 'all', label: '全部' },
+  { id: 'found', label: '仅问题' },
+  { id: 'not_applicable', label: '不适用' },
   { id: 'critical', label: '严重' },
   { id: 'major', label: '较重' },
   { id: 'minor', label: '轻微' },
@@ -17,11 +21,13 @@ const filters: Array<{ id: IssueSeverity | 'all'; label: string }> = [
 ]
 
 export function IssueList({ issues, onPreviewFix }: IssueListProps) {
-  const [filter, setFilter] = useState<IssueSeverity | 'all'>('all')
-  const visibleIssues = useMemo(
-    () => (filter === 'all' ? issues : issues.filter((issue) => issue.severity === filter)),
-    [filter, issues],
-  )
+  const [filter, setFilter] = useState<IssueFilter>('all')
+  const visibleIssues = useMemo(() => {
+    if (filter === 'all') return issues
+    if (filter === 'found') return issues.filter((issue) => issue.status === 'found')
+    if (filter === 'not_applicable') return issues.filter((issue) => issue.status === 'not_applicable')
+    return issues.filter((issue) => issue.status === 'found' && issue.severity === filter)
+  }, [filter, issues])
 
   return (
     <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -44,12 +50,16 @@ export function IssueList({ issues, onPreviewFix }: IssueListProps) {
 
       {visibleIssues.length === 0 ? (
         <div className="rounded-md border border-dashed border-slate-300 bg-white px-4 py-10 text-center text-sm text-slate-500">
-          暂无问题
+          暂无内容
         </div>
       ) : (
         <div className="space-y-3">
           {visibleIssues.map((issue) => (
-            <IssueCard key={`${issue.skill_id}-${issue.id}-${issue.description}`} issue={issue} onPreviewFix={onPreviewFix} />
+            <IssueCard
+              key={`${issue.skill_id}-${issue.id}-${issue.status}-${issue.description}`}
+              issue={issue}
+              onPreviewFix={onPreviewFix}
+            />
           ))}
         </div>
       )}

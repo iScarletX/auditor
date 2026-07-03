@@ -1,12 +1,15 @@
 export type IssueCategory =
-  | 'engineering_contract'
-  | 'instruction_quality'
-  | 'structure'
-  | 'io_contract'
+  | 'clarity'
+  | 'contract'
+  | 'resource'
+  | 'interop'
   | 'robustness'
-  | 'quality_control'
+  | 'quality'
+  | 'compliance'
 
 export type IssueSeverity = 'critical' | 'major' | 'minor' | 'info'
+
+export type IssueStatus = 'found' | 'not_applicable'
 
 export type ExecutionMode = 'static_check' | 'llm_judge' | 'hybrid'
 
@@ -14,6 +17,17 @@ export type Consensus =
   | 'confirmed'
   | 'single_model_flag'
   | 'static_check_deterministic'
+
+export type EvidenceType =
+  | 'explicit_conflict'
+  | 'explicit_omission'
+  | 'semantic_inference'
+  | 'stylistic_judgment'
+
+export type ScenarioAssumption =
+  | 'inferred_from_text'
+  | 'user_provided'
+  | 'worst_case_default'
 
 export type FixAction =
   | 'text_replace'
@@ -46,12 +60,15 @@ export interface Issue {
   id: string
   skill_id: string
   category: IssueCategory
-  severity: IssueSeverity
-  confidence: number
+  status: IssueStatus
+  severity?: IssueSeverity
+  evidence_type?: EvidenceType
+  scenario_assumption?: ScenarioAssumption
+  not_applicable_reason?: string
   execution_mode?: ExecutionMode
   domain_specific?: boolean
-  consensus: Consensus
-  vote: {
+  consensus?: Consensus
+  vote?: {
     models_flagged: string[]
     models_passed: string[]
   }
@@ -60,19 +77,41 @@ export interface Issue {
   fix: Fix | null
 }
 
+export interface ConsolidationConflictNote {
+  issue_ids: string[]
+  description: string
+  recommendation: string
+}
+
+export interface ConsolidationSystemicFinding {
+  related_issue_ids: string[]
+  description: string
+  severity: IssueSeverity
+}
+
+export interface ReviewConsolidation {
+  has_new_findings: boolean
+  new_issues: Issue[]
+  conflict_notes: ConsolidationConflictNote[]
+  systemic_findings: ConsolidationSystemicFinding[]
+}
+
 export interface ReviewReport {
   meta: {
     target_sp_hash: string
+    scenario_hint: string
     skills_run: string[]
     models_used: string[]
     timestamp: string
     review_duration_ms?: number
   }
   issues: Issue[]
+  consolidation: ReviewConsolidation
   summary: {
     overall_score: number
     issue_count_by_severity: Record<IssueSeverity, number>
     issue_count_by_category: Partial<Record<IssueCategory, number>>
+    not_applicable_count: number
   }
 }
 
@@ -103,6 +142,7 @@ export interface ModelConfig {
 }
 
 export interface ReviewProgressEvent {
+  phase: 'skill_check' | 'consolidation' | 'complete'
   skillId: string
   skillTitle: string
   completed: number

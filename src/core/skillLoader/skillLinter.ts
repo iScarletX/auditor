@@ -6,13 +6,22 @@ import type {
 
 const EXECUTION_MODES: ExecutionMode[] = ['static_check', 'llm_judge', 'hybrid']
 const CATEGORIES: IssueCategory[] = [
-  'engineering_contract',
-  'instruction_quality',
-  'structure',
-  'io_contract',
+  'clarity',
+  'contract',
+  'resource',
+  'interop',
   'robustness',
-  'quality_control',
+  'quality',
+  'compliance',
 ]
+
+const LEGACY_CATEGORY_MAP: Record<string, IssueCategory> = {
+  engineering_contract: 'resource',
+  instruction_quality: 'clarity',
+  structure: 'clarity',
+  io_contract: 'contract',
+  quality_control: 'quality',
+}
 
 export interface SkillLintResult {
   ok: boolean
@@ -95,7 +104,9 @@ export function lintSkillFile(
     errors.push(`execution_mode 必须是 ${EXECUTION_MODES.join(' / ')} 之一`)
   }
 
-  const category = data.category
+  const category = typeof data.category === 'string' && LEGACY_CATEGORY_MAP[data.category]
+    ? LEGACY_CATEGORY_MAP[data.category]
+    : data.category
   if (typeof category === 'string' && !CATEGORIES.includes(category as IssueCategory)) {
     errors.push(`category 必须是 ${CATEGORIES.join(' / ')} 之一`)
   }
@@ -144,7 +155,7 @@ export function lintSkillFile(
 
   const skill: SkillDefinition = {
     id: String(data.id),
-    category: data.category as IssueCategory,
+    category: category as IssueCategory,
     title: String(data.title),
     version: String(data.version),
     execution_mode: data.execution_mode as ExecutionMode,

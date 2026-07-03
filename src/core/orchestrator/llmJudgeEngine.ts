@@ -1,27 +1,44 @@
 import { BUTLER_CRITIC_SYSTEM_PROMPT } from '../../prompts/butlerCriticSystemPrompt'
 import type {
+  EvidenceType,
   Fix,
   FixAction,
   Issue,
   IssueCategory,
   IssueSeverity,
+  IssueStatus,
   ModelConfig,
+  ScenarioAssumption,
   SkillDefinition,
 } from '../../types/reviewReport.types'
-import { clamp } from '../../lib/utils'
 import { getProviderAdapter } from '../modelProvider/providerAdapter'
+import { parseJsonObject } from '../responseRepair/autoRepairJson'
+import { retryWithErrorFeedback } from '../responseRepair/retryWithErrorFeedback'
 import type { StaticCheckResult } from './staticCheckEngine'
 
 const CATEGORIES: IssueCategory[] = [
-  'engineering_contract',
-  'instruction_quality',
-  'structure',
-  'io_contract',
+  'clarity',
+  'contract',
+  'resource',
+  'interop',
   'robustness',
-  'quality_control',
+  'quality',
+  'compliance',
 ]
 
 const SEVERITIES: IssueSeverity[] = ['critical', 'major', 'minor', 'info']
+const STATUSES: IssueStatus[] = ['found', 'not_applicable']
+const EVIDENCE_TYPES: EvidenceType[] = [
+  'explicit_conflict',
+  'explicit_omission',
+  'semantic_inference',
+  'stylistic_judgment',
+]
+const SCENARIO_ASSUMPTIONS: ScenarioAssumption[] = [
+  'inferred_from_text',
+  'user_provided',
+  'worst_case_default',
+]
 
 const FIX_ACTIONS: FixAction[] = [
   'text_replace',
@@ -38,8 +55,11 @@ interface UnknownIssue {
   id?: unknown
   skill_id?: unknown
   category?: unknown
+  status?: unknown
   severity?: unknown
-  confidence?: unknown
+  evidence_type?: unknown
+  scenario_assumption?: unknown
+  not_applicable_reason?: unknown
   location?: {
     anchor_before?: unknown
     anchor_after?: unknown
@@ -61,26 +81,6 @@ export interface ModelJudgeOutput {
   error?: string
 }
 
-function stripCodeFence(content: string) {
-  return content
-    .trim()
-    .replace(/^```(?:json)?/i, '')
-    .replace(/```$/i, '')
-    .trim()
-}
-
-function parseJsonObject(content: string): UnknownReport {
-  const cleaned = stripCodeFence(content)
-  try {
-    return JSON.parse(cleaned) as UnknownReport
-  } catch {
-    const first = cleaned.indexOf('{')
-    const last = cleaned.lastIndexOf('}')
-    if (first === -1 || last === -1 || last <= first) throw new Error('模型输出不是可解析 JSON')
-    return JSON.parse(cleaned.slice(first, last + 1)) as UnknownReport
-  }
-}
-
 function normalizeFix(value: unknown): Fix | null {
   if (!value || typeof value !== 'object') return null
   const candidate = value as Partial<Fix>
@@ -96,51 +96,86 @@ function normalizeFix(value: unknown): Fix | null {
   }
 }
 
+function normalizeLineRange(value: unknown): [number, number] | undefined {
+  if (!Array.isArray(value) || value.length !== 2) return undefined
+  const start = Number(value[0])
+  const end = Number(value[1])
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return undefined
+  return [Math.max(1, Math.round(start)), Math.max(1, Math.round(end))]
+}
+
 function normalizeIssue(
   value: UnknownIssue,
   skill: SkillDefinition,
   modelId: string,
   index: number,
+  scenarioHint: string,
 ): Issue {
   const category = CATEGORIES.includes(value.category as IssueCategory)
     ? (value.category as IssueCategory)
     : skill.category
-  const severity = SEVERITIES.includes(value.severity as IssueSeverity)
-    ? (value.severity as IssueSeverity)
-    : 'major'
-  const rawConfidence = typeof value.confidence === 'number' ? value.confidence : 0.5
+  const status = STATUSES.includes(value.status as IssueStatus)
+    ? (value.status as IssueStatus)
+    : 'found'
   const location = value.location ?? {}
-
-  return {
+  const base = {
     id: typeof value.id === 'string' && value.id ? value.id : `${skill.id}-${index + 1}`,
     skill_id: typeof value.skill_id === 'string' && value.skill_id ? value.skill_id : skill.id,
     category,
-    severity,
-    confidence: clamp(rawConfidence, 0, 1),
+    status,
     execution_mode: skill.execution_mode,
     domain_specific: skill.domain_specific,
-    consensus: 'single_model_flag',
+    consensus: 'single_model_flag' as const,
     vote: {
-      models_flagged: [modelId],
-      models_passed: [],
+      models_flagged: status === 'found' ? [modelId] : [],
+      models_passed: status === 'found' ? [] : [modelId],
     },
     location: {
       anchor_before: typeof location.anchor_before === 'string' ? location.anchor_before : '',
       anchor_after: typeof location.anchor_after === 'string' ? location.anchor_after : '',
       matched_text: typeof location.matched_text === 'string' ? location.matched_text : undefined,
-      line_range: Array.isArray(location.line_range) && location.line_range.length === 2
-        ? [Number(location.line_range[0]), Number(location.line_range[1])]
-        : undefined,
+      line_range: normalizeLineRange(location.line_range),
       ambiguous: Boolean(location.ambiguous),
     },
     description: typeof value.description === 'string' && value.description
       ? value.description
-      : '模型标记了该检查项，但未返回完整描述。',
-    fix: normalizeFix(value.fix),
+      : status === 'found'
+        ? '模型标记了该检查项，但未返回完整描述。'
+        : '该检查项不适用于当前 System Prompt。',
+    fix: status === 'found' ? normalizeFix(value.fix) : null,
+  }
+
+  if (status === 'not_applicable') {
+    return {
+      ...base,
+      not_applicable_reason: typeof value.not_applicable_reason === 'string' && value.not_applicable_reason
+        ? value.not_applicable_reason
+        : '当前 target_sp 不涉及该检查项。',
+    }
+  }
+
+  return {
+    ...base,
+    severity: SEVERITIES.includes(value.severity as IssueSeverity)
+      ? (value.severity as IssueSeverity)
+      : 'major',
+    evidence_type: EVIDENCE_TYPES.includes(value.evidence_type as EvidenceType)
+      ? (value.evidence_type as EvidenceType)
+      : 'semantic_inference',
+    scenario_assumption: SCENARIO_ASSUMPTIONS.includes(value.scenario_assumption as ScenarioAssumption)
+      ? (value.scenario_assumption as ScenarioAssumption)
+      : scenarioHint.trim()
+        ? 'user_provided'
+        : 'inferred_from_text',
   }
 }
 
-function buildUserPrompt(skill: SkillDefinition, staticResult: StaticCheckResult | null, targetSp: string) {
+function buildUserPrompt(
+  skill: SkillDefinition,
+  staticResult: StaticCheckResult | null,
+  targetSp: string,
+  scenarioHint: string,
+) {
   return `<loaded_skills>
 ${skill.fullContent}
 </loaded_skills>
@@ -148,6 +183,10 @@ ${skill.fullContent}
 <static_check_results>
 ${JSON.stringify(staticResult ?? { skill_id: skill.id, issues: [] }, null, 2)}
 </static_check_results>
+
+<scenario_hint>
+${scenarioHint}
+</scenario_hint>
 
 <target_sp>
 ${targetSp}
@@ -157,6 +196,7 @@ ${targetSp}
 export async function judgeSkillWithModels(params: {
   skill: SkillDefinition
   targetSp: string
+  scenarioHint: string
   staticResult: StaticCheckResult | null
   models: ModelConfig[]
   apiKey: string
@@ -165,22 +205,34 @@ export async function judgeSkillWithModels(params: {
   const tasks = params.models.map(async (model): Promise<ModelJudgeOutput> => {
     try {
       const adapter = getProviderAdapter(model.provider)
-      const content = await adapter.chatCompletion({
+      const request = {
         baseUrl: model.baseUrl,
         apiKey: params.apiKey,
         modelId: model.modelId,
         signal: params.signal,
         messages: [
-          { role: 'system', content: BUTLER_CRITIC_SYSTEM_PROMPT },
-          { role: 'user', content: buildUserPrompt(params.skill, params.staticResult, params.targetSp) },
+          { role: 'system' as const, content: BUTLER_CRITIC_SYSTEM_PROMPT },
+          {
+            role: 'user' as const,
+            content: buildUserPrompt(params.skill, params.staticResult, params.targetSp, params.scenarioHint),
+          },
         ],
+      }
+      const content = await retryWithErrorFeedback({
+        adapter,
+        request,
+        schemaName: 'SkillIssueList',
+        validate: (raw) => {
+          const parsed = parseJsonObject<UnknownReport>(raw)
+          if (!Array.isArray(parsed.issues)) throw new Error('缺少 issues 数组')
+        },
       })
-      const parsed = parseJsonObject(content)
+      const parsed = parseJsonObject<UnknownReport>(content)
       const rawIssues = Array.isArray(parsed.issues) ? parsed.issues : []
       return {
         modelId: model.modelId,
         issues: rawIssues.map((issue, index) =>
-          normalizeIssue(issue as UnknownIssue, params.skill, model.modelId, index),
+          normalizeIssue(issue as UnknownIssue, params.skill, model.modelId, index, params.scenarioHint),
         ),
       }
     } catch (error) {

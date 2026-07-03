@@ -1,5 +1,5 @@
 import { Activity, BarChart3 } from 'lucide-react'
-import type { ReviewReport, SkillDefinition } from '../../types/reviewReport.types'
+import type { IssueCategory, ReviewReport, SkillDefinition } from '../../types/reviewReport.types'
 import { Badge } from '../ui/Badge'
 
 interface SummaryPanelProps {
@@ -8,19 +8,21 @@ interface SummaryPanelProps {
   selectedModelCount: number
 }
 
-const categoryLabel: Record<string, string> = {
-  engineering_contract: '工程契约',
-  instruction_quality: '指令质量',
-  structure: '结构',
-  io_contract: 'I/O 契约',
-  robustness: '稳健性',
-  quality_control: '质量控制',
+const categoryLabel: Record<IssueCategory, string> = {
+  clarity: '清晰度',
+  contract: '契约',
+  resource: '资源',
+  interop: '兼容',
+  robustness: '稳健',
+  quality: '质量',
+  compliance: '合规',
 }
 
 export function SummaryPanel({ report, selectedSkills, selectedModelCount }: SummaryPanelProps) {
   const nonStaticSkillCount = selectedSkills.filter((skill) => skill.execution_mode !== 'static_check').length
-  const estimatedCalls = nonStaticSkillCount * selectedModelCount
-  const estimatedTokens = estimatedCalls * 3500
+  const estimatedCalls = nonStaticSkillCount * selectedModelCount + (selectedModelCount > 0 ? 1 : 0)
+  const estimatedTokens = estimatedCalls * 3000
+  const foundCount = report?.issues.filter((issue) => issue.status === 'found').length ?? 0
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4">
@@ -38,7 +40,7 @@ export function SummaryPanel({ report, selectedSkills, selectedModelCount }: Sum
         </div>
         <div className="rounded-md bg-slate-50 p-3">
           <div className="text-xs text-slate-500">问题数</div>
-          <div className="mt-1 text-3xl font-semibold text-slate-950">{report?.issues.length ?? 0}</div>
+          <div className="mt-1 text-3xl font-semibold text-slate-950">{foundCount}</div>
         </div>
       </div>
 
@@ -73,10 +75,14 @@ export function SummaryPanel({ report, selectedSkills, selectedModelCount }: Sum
             <div className="space-y-1 text-xs text-slate-700">
               {Object.entries(report.summary.issue_count_by_category).map(([key, value]) => (
                 <div key={key} className="flex items-center justify-between rounded-md bg-slate-50 px-2 py-1.5">
-                  <span>{categoryLabel[key] ?? key}</span>
+                  <span>{categoryLabel[key as IssueCategory] ?? key}</span>
                   <span className="font-semibold text-slate-950">{value}</span>
                 </div>
               ))}
+              <div className="flex items-center justify-between rounded-md bg-slate-50 px-2 py-1.5">
+                <span>不适用</span>
+                <span className="font-semibold text-slate-950">{report.summary.not_applicable_count}</span>
+              </div>
             </div>
           </div>
         </div>

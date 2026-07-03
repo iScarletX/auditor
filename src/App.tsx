@@ -1,10 +1,12 @@
 import { History, Play, RotateCcw, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { ConsolidationPanel } from './components/ConsolidationPanel/ConsolidationPanel'
 import { DiffPreview } from './components/DiffPreview/DiffPreview'
 import { IssueList } from './components/IssueList/IssueList'
 import { ModelSelector } from './components/ModelSelector/ModelSelector'
 import { PromptInput } from './components/PromptInput/PromptInput'
 import { ReviewProgress } from './components/ReviewProgress/ReviewProgress'
+import { ScenarioHintInput } from './components/ScenarioHintInput/ScenarioHintInput'
 import { SkillSelector } from './components/SkillSelector/SkillSelector'
 import { SummaryPanel } from './components/SummaryPanel/SummaryPanel'
 import { Button } from './components/ui/Button'
@@ -46,6 +48,7 @@ function loadInitialModels() {
 
 function App() {
   const [targetSp, setTargetSp] = useState(SAMPLE_PROMPT)
+  const [scenarioHint, setScenarioHint] = useState('')
   const [skills, setSkills] = useState<SkillDefinition[]>([])
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(new Set())
   const [models, setModels] = useState<ModelConfig[]>(loadInitialModels)
@@ -134,7 +137,7 @@ function App() {
       return
     }
     if (selectedModelCount === 1) {
-      const confirmed = window.confirm('仅选择1个模型时，所有判断都会被标记为单模型标记，置信度较低，建议至少选择2个模型。仍要继续吗？')
+      const confirmed = window.confirm('仅选择1个模型时，LLM 判断都会被标记为单模型标记，建议至少选择2个模型。仍要继续吗？')
       if (!confirmed) return
     }
 
@@ -143,6 +146,7 @@ function App() {
       const apiKey = await loadDecryptedApiKey()
       const finalReport = await runReview({
         targetSp,
+        scenarioHint,
         selectedSkills,
         selectedModels: models,
         apiKey,
@@ -157,6 +161,7 @@ function App() {
         createdAt: new Date().toISOString(),
         title: targetSp.slice(0, 64) || 'Untitled review',
         targetSp,
+        scenarioHint,
         report: finalReport,
       })
       await refreshHistory()
@@ -193,6 +198,7 @@ function App() {
 
   const loadHistoryRecord = (record: ReviewHistoryRecord) => {
     setTargetSp(record.targetSp)
+    setScenarioHint(record.scenarioHint ?? record.report.meta.scenario_hint ?? '')
     setReport(record.report)
     setStreamIssues(record.report.issues)
     setEvents([])
@@ -218,6 +224,7 @@ function App() {
               variant="secondary"
               onClick={() => {
                 setTargetSp(SAMPLE_PROMPT)
+                setScenarioHint('')
                 setReport(null)
                 setStreamIssues([])
               }}
@@ -236,11 +243,13 @@ function App() {
       <div className="mx-auto grid max-w-[1540px] gap-4 px-4 py-4 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-4">
           <PromptInput value={targetSp} onChange={setTargetSp} />
+          <ScenarioHintInput value={scenarioHint} onChange={setScenarioHint} />
           {error ? (
             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
               {error}
             </div>
           ) : null}
+          <ConsolidationPanel consolidation={report?.consolidation ?? null} />
           <IssueList issues={visibleIssues} onPreviewFix={previewFix} />
         </div>
 
@@ -261,7 +270,7 @@ function App() {
             onReplaceSelection={(ids) => setSelectedSkillIds(new Set(ids))}
             onSkillAdded={addUserSkill}
           />
-          <ReviewProgress running={running} events={events} total={selectedSkills.length} />
+          <ReviewProgress running={running} events={events} total={selectedSkills.length + 1} />
 
           <section className="rounded-lg border border-slate-200 bg-white p-4">
             <div className="mb-3 flex items-center gap-2">
@@ -281,7 +290,7 @@ function App() {
                   >
                     <div className="font-medium text-slate-900">{record.title}</div>
                     <div className="mt-1 text-slate-500">
-                      {new Date(record.createdAt).toLocaleString()} · {record.report.issues.length} issues
+                      {new Date(record.createdAt).toLocaleString()} · {record.report.issues.filter((issue) => issue.status === 'found').length} issues
                     </div>
                   </button>
                 ))}
