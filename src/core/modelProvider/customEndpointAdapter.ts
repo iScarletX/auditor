@@ -1,4 +1,4 @@
-import type { ChatCompletionRequest, ProviderAdapter } from './providerAdapter'
+import { ModelProviderError, type ChatCompletionRequest, type ProviderAdapter } from './providerAdapter'
 
 interface CustomChatCompletionResponse {
   choices?: Array<{
@@ -32,13 +32,23 @@ export const customEndpointAdapter: ProviderAdapter = {
       }),
     })
 
-    const json = (await response.json()) as CustomChatCompletionResponse
+    const rawResponseText = await response.text()
+    let json: CustomChatCompletionResponse
+    try {
+      json = JSON.parse(rawResponseText) as CustomChatCompletionResponse
+    } catch {
+      throw new ModelProviderError('自定义端点返回了不可解析的响应。', rawResponseText)
+    }
+
     if (!response.ok) {
-      throw new Error(json.error?.message ?? `自定义端点请求失败：HTTP ${response.status}`)
+      throw new ModelProviderError(json.error?.message ?? `自定义端点请求失败：HTTP ${response.status}`, rawResponseText)
     }
 
     const content = json.choices?.[0]?.message?.content
-    if (!content) throw new Error('自定义端点返回为空')
-    return content
+    if (!content) throw new ModelProviderError('自定义端点返回为空', rawResponseText)
+    return {
+      content,
+      rawResponseText,
+    }
   },
 }

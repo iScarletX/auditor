@@ -8,9 +8,29 @@ import type {
   SkillDefinition,
 } from '../../types/reviewReport.types'
 
+export interface StaticCheckFact {
+  /** 事实类型，例如 json_structure_detected / field_declarations_detected */
+  kind: 'json_structure_detected' | 'field_declarations_detected'
+  /** 人可读的事实摘要，含具体位置和完整程度描述 */
+  summary: string
+  /** 在原文中的行号范围 */
+  line_range?: [number, number]
+  /** 最近的章节标题提示，例如 "6.2 输出JSON结构" */
+  section_hint?: string
+  /** 检测到的字段数量 */
+  field_count?: number
+  /** 检测到的字段名清单 */
+  field_names?: string[]
+  /** 完整程度细粒度信息：已有什么、缺什么，供模型判断"存在但不完整" */
+  completeness_notes: string[]
+  /** 原文证据片段（截断） */
+  evidence_snippet?: string
+}
+
 export interface StaticCheckResult {
   skill_id: string
   issues: Issue[]
+  facts?: StaticCheckFact[]
 }
 
 function lineRangeForIndex(text: string, index: number, length: number): [number, number] {
@@ -84,6 +104,126 @@ function makeIssueAtText(params: Parameters<typeof makeStaticIssue>[0] & { targe
 
 function safeFix(fix: Omit<Fix, 'fix_requires_review'>): Fix {
   return { ...fix, fix_requires_review: true }
+}
+
+function nearestSectionHint(targetSp: string, index: number): string | undefined {
+  const before = targetSp.slice(0, index)
+  const lines = before.split('\n')
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i].trim()
+    // 匹配常见章节标题：Markdown 标题、数字编号（6.2 / 六、/ 第六节）
+    if (/^#{1,6}\s+\S/.test(line) || /^\d+(?:\.\d+)*[\s.、:：]/.test(line) || /^[一二三四五六七八九十]+[、.．]/.test(line) || /^第[一二三四五六七八九十\d]+[章节部分]/.test(line)) {
+      return line.slice(0, 60)
+    }
+  }
+  return undefined
+}
+
+/**
+ * 扫描疑似 JSON 结构定义块（大括号包裹、含多个 "field": 声明），
+ * 产出正向事实，告诉模型"结构已存在，你的任务是判断它是否完整/精确，不是重新判断是否存在"。
+ */
+function scanJsonStructureFacts(targetSp: string): StaticCheckFact[] {
+  const facts: StaticCheckFact[] = []
+  const fieldKeyPattern = /"([A-Za-z_][A-Za-z0-9_.-]*)"\s*[:：]/g
+
+  // 逐个扫描顶层大括号块（简单括号平衡，容忍嵌套）
+  let searchFrom = 0
+  while (searchFrom < targetSp.length) {
+    const open = targetSp.indexOf('{', searchFrom)
+    if (open === -1) break
+    let depth = 0
+    let close = -1
+    for (let i = open; i < Math.min(targetSp.length, open + 20000); i += 1) {
+      const ch = targetSp[i]
+      if (ch === '{') depth += 1
+      else if (ch === '}') {
+        depth -= 1
+        if (depth === 0) {
+          close = i
+          break
+        }
+      }
+    }
+    if (close === -1) {
+      searchFrom = open + 1
+      continue
+    }
+
+    const block = targetSp.slice(open, close + 1)
+    const fieldNames: string[] = []
+    let match: RegExpExecArray | null
+    fieldKeyPattern.lastIndex = 0
+    while ((match = fieldKeyPattern.exec(block)) !== null) {
+      if (!fieldNames.includes(match[1])) fieldNames.push(match[1])
+    }
+
+    // 至少 2 个字段声明才算结构定义，避免把模板占位符误认为结构
+    if (fieldNames.length >= 2) {
+      const blockContext = targetSp.slice(Math.max(0, open - 400), close + 1)
+      const hasTypeInfo = /字符串|数字|整数|小数|数组|对象|布尔|boolean|string|number|array|object/i.test(blockContext)
+      const hasRequiredMarkers = /必填|选填|required|optional|必须存在|可以省略|可省略|留空/i.test(blockContext)
+      const hasExampleValues = /[:：]\s*"[^"]{2,}"/.test(block) || /例如|示例|举例|example/i.test(blockContext)
+      const hasOrderHint = /顺序|按以下顺序|依次|order/i.test(blockContext)
+
+      const completeness: string[] = []
+      completeness.push(hasTypeInfo ? '附近存在字段类型说明' : '未检测到字段类型说明')
+      completeness.push(hasRequiredMarkers ? '存在必填/选填标记' : '未检测到必填/选填标记')
+      completeness.push(hasExampleValues ? '存在示例值或示例说明' : '未检测到示例值')
+      completeness.push(hasOrderHint ? '存在字段顺序说明' : '未检测到字段顺序说明')
+
+      const lineRange = lineRangeForIndex(targetSp, open, block.length)
+      const sectionHint = nearestSectionHint(targetSp, open)
+      facts.push({
+        kind: 'json_structure_detected',
+        summary: `已检测到疑似 JSON 结构定义（第 ${lineRange[0]}-${lineRange[1]} 行${sectionHint ? `，位于“${sectionHint}”附近` : ''}），包含 ${fieldNames.length} 个字段声明。完整程度：${completeness.join('；')}。`,
+        line_range: lineRange,
+        section_hint: sectionHint,
+        field_count: fieldNames.length,
+        field_names: fieldNames.slice(0, 30),
+        completeness_notes: completeness,
+        evidence_snippet: block.slice(0, 300),
+      })
+    }
+
+    searchFrom = close + 1
+  }
+
+  return facts
+}
+
+/**
+ * 扫描非 JSON 块形式的字段声明列表（例如 "- title：字符串，不超过20字"）。
+ */
+function scanFieldDeclarationFacts(targetSp: string): StaticCheckFact[] {
+  const lines = targetSp.split('\n')
+  const declarationPattern = /^\s*[-*•・]?\s*`?([A-Za-z_][A-Za-z0-9_.-]{1,40})`?\s*[（(：:]/
+  const typeWords = /字符串|数字|整数|小数|数组|对象|布尔|boolean|string|number|array|object/i
+  const declared: Array<{ name: string; line: number; hasType: boolean }> = []
+
+  lines.forEach((line, index) => {
+    const match = declarationPattern.exec(line)
+    if (match && typeWords.test(line)) {
+      declared.push({ name: match[1], line: index + 1, hasType: true })
+    }
+  })
+
+  if (declared.length < 2) return []
+
+  const withRequired = lines.some((line) => declarationPattern.test(line) && /必填|选填|required|optional/i.test(line))
+  const names = [...new Set(declared.map((item) => item.name))]
+  const completeness = [
+    '每条声明均附带类型词',
+    withRequired ? '部分或全部声明带必填/选填标记' : '未检测到必填/选填标记',
+  ]
+  return [{
+    kind: 'field_declarations_detected',
+    summary: `已检测到 ${names.length} 条带类型说明的字段声明（第 ${declared[0].line}-${declared[declared.length - 1].line} 行区间）。完整程度：${completeness.join('；')}。`,
+    line_range: [declared[0].line, declared[declared.length - 1].line],
+    field_count: names.length,
+    field_names: names.slice(0, 30),
+    completeness_notes: completeness,
+  }]
 }
 
 function runE1(skill: SkillDefinition, targetSp: string): Issue[] {
@@ -410,7 +550,11 @@ function runSymbolConflict(skill: SkillDefinition, targetSp: string): Issue[] {
 
 export function runStaticCheckEngine(skill: SkillDefinition, targetSp: string): StaticCheckResult {
   let issues: Issue[] = []
-  if (skill.id === '02_contract_output_format' || skill.id === 'E1_json_contract') issues = runE1(skill, targetSp)
+  let facts: StaticCheckFact[] = []
+  if (skill.id === '02_contract_output_format' || skill.id === 'E1_json_contract') {
+    issues = runE1(skill, targetSp)
+    facts = [...scanJsonStructureFacts(targetSp), ...scanFieldDeclarationFacts(targetSp)]
+  }
   if (skill.id === '03_resource_token_budget' || skill.id === 'E2_token_budget') issues = runE2(skill, targetSp)
   if (skill.id === '01_clarity_missing_constraint' || skill.id === 'I5_missing_constraint') issues = runI5(skill, targetSp)
   if (skill.id === '02_contract_output_precision' || skill.id === 'IO3_output_schema_precision') issues = runIo3(skill, targetSp)
@@ -419,6 +563,7 @@ export function runStaticCheckEngine(skill: SkillDefinition, targetSp: string): 
   return {
     skill_id: skill.id,
     issues: issues.filter((issue) => CATEGORIES_FOR_STATIC.has(issue.category)),
+    ...(facts.length > 0 ? { facts } : {}),
   }
 }
 

@@ -1,5 +1,5 @@
-import { KeyRound } from 'lucide-react'
-import { useState } from 'react'
+import { KeyRound, Plus } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import type { ModelConfig } from '../../types/reviewReport.types'
 import { DEFAULT_MODELS, listOpenRouterModels } from '../../core/modelProvider/providerAdapter'
 import { Button } from '../ui/Button'
@@ -12,6 +12,16 @@ interface ModelSelectorProps {
   apiKeyMask: string
   onSaveApiKey: (value: string) => Promise<void>
   onLoadStoredApiKey: () => Promise<string | null>
+}
+
+function uniqueModels(models: ModelConfig[]) {
+  const seen = new Set<string>()
+  return models.filter((model) => {
+    const key = `${model.provider}:${model.baseUrl}:${model.modelId}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 export function ModelSelector({
@@ -29,13 +39,21 @@ export function ModelSelector({
     DEFAULT_MODELS.map((model) => ({ ...model, selected: false })),
   )
   const [modelStatus, setModelStatus] = useState<string | null>(null)
+  const [customOpen, setCustomOpen] = useState(false)
+  const [customLabel, setCustomLabel] = useState('')
+  const [customBaseUrl, setCustomBaseUrl] = useState('')
+  const [customModelId, setCustomModelId] = useState('')
   const selectedModels = models.filter((model) => model.selected).slice(0, 3)
-  const selectedIds = selectedModels.map((model) => model.id)
+  const selectedKeys = new Set(selectedModels.map((model) => `${model.provider}:${model.baseUrl}:${model.modelId}`))
   const selectedCount = selectedModels.length
-  const modelChoices = [
-    ...selectedModels.filter((model) => !availableModels.some((option) => option.id === model.id)),
-    ...availableModels,
-  ]
+  const modelChoices = useMemo(
+    () => uniqueModels([
+      ...selectedModels,
+      ...availableModels,
+      ...DEFAULT_MODELS.map((model) => ({ ...model, selected: false })),
+    ]),
+    [availableModels, selectedModels],
+  )
 
   const refreshModels = async (apiKey: string | null) => {
     if (!apiKey) {
@@ -53,18 +71,33 @@ export function ModelSelector({
     }
   }
 
-  const updateSelectionSlot = (slotIndex: number, modelId: string) => {
-    const nextIds = [...selectedIds]
-    if (modelId) nextIds[slotIndex] = modelId
-    else nextIds.splice(slotIndex, 1)
+  const toggleModel = (model: ModelConfig) => {
+    const key = `${model.provider}:${model.baseUrl}:${model.modelId}`
+    if (selectedKeys.has(key)) {
+      onChange(selectedModels.filter((item) => `${item.provider}:${item.baseUrl}:${item.modelId}` !== key))
+      return
+    }
+    if (selectedModels.length >= 3) return
+    onChange([...selectedModels, { ...model, selected: true }])
+  }
 
-    const uniqueIds = nextIds.filter(Boolean).filter((id, index, list) => list.indexOf(id) === index).slice(0, 3)
-    const nextModels = uniqueIds
-      .map((id) => modelChoices.find((model) => model.id === id))
-      .filter((model): model is ModelConfig => Boolean(model))
-      .map((model) => ({ ...model, selected: true }))
-
-    onChange(nextModels)
+  const addCustomModel = () => {
+    const baseUrl = customBaseUrl.trim()
+    const modelId = customModelId.trim()
+    if (!baseUrl || !modelId || selectedModels.length >= 3) return
+    const model: ModelConfig = {
+      id: `custom-${crypto.randomUUID()}`,
+      label: customLabel.trim() || modelId,
+      provider: 'custom',
+      baseUrl,
+      modelId,
+      selected: true,
+    }
+    onChange([...selectedModels, model])
+    setCustomLabel('')
+    setCustomBaseUrl('')
+    setCustomModelId('')
+    setCustomOpen(false)
   }
 
   const saveKey = async () => {
@@ -140,33 +173,71 @@ export function ModelSelector({
           )}
         </div>
 
-        {selectedCount === 1 ? (
+        {selectedCount < 2 ? (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            仅选择 1 个模型时，LLM 判断都会标记为单模型标记，建议至少选择 2 个模型。
+            语义审查需要选择 2-3 个检查官模型；静态检查可不调用模型。
           </div>
         ) : null}
 
-        <div className="grid gap-2">
-          {[0, 1, 2].map((slotIndex) => (
-            <div key={slotIndex} className="grid gap-1.5">
-              <FieldLabel>{`检查官 ${slotIndex + 1}`}</FieldLabel>
-              <select
-                value={selectedIds[slotIndex] ?? ''}
-                className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                onChange={(event) => updateSelectionSlot(slotIndex, event.target.value)}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <FieldLabel>检查官模型</FieldLabel>
+            <span className="text-xs text-slate-500">{selectedCount}/3</span>
+          </div>
+          <div className="max-h-56 space-y-2 overflow-auto rounded-md border border-slate-200 p-2">
+            {modelChoices.map((model) => {
+              const key = `${model.provider}:${model.baseUrl}:${model.modelId}`
+              const checked = selectedKeys.has(key)
+              const disabled = !checked && selectedCount >= 3
+              return (
+                <label
+                  key={key}
+                  className={`flex items-start gap-2 rounded-md px-2 py-2 text-sm transition ${
+                    disabled ? 'text-slate-400' : 'text-slate-800 hover:bg-slate-50'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={disabled}
+                    onChange={() => toggleModel(model)}
+                    className="mt-1"
+                  />
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">{model.label}</span>
+                    <span className="block truncate text-xs text-slate-500">{model.modelId}</span>
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="rounded-md border border-slate-200">
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-slate-900"
+            onClick={() => setCustomOpen((value) => !value)}
+          >
+            <Plus className="h-4 w-4 text-slate-500" />
+            自定义兼容端点
+          </button>
+          {customOpen ? (
+            <div className="space-y-2 border-t border-slate-200 p-3">
+              <Input value={customLabel} placeholder="显示名称（可选）" onChange={(event) => setCustomLabel(event.target.value)} />
+              <Input value={customBaseUrl} placeholder="Base URL，例如 https://api.example.com/v1" onChange={(event) => setCustomBaseUrl(event.target.value)} />
+              <Input value={customModelId} placeholder="Model ID" onChange={(event) => setCustomModelId(event.target.value)} />
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full"
+                onClick={addCustomModel}
+                disabled={!customBaseUrl.trim() || !customModelId.trim() || selectedCount >= 3}
               >
-                <option value="">{slotIndex === 0 ? '选择模型' : '不启用'}</option>
-                {modelChoices.map((model) => {
-                  const alreadyUsed = selectedIds.includes(model.id) && selectedIds[slotIndex] !== model.id
-                  return (
-                    <option key={model.id} value={model.id} disabled={alreadyUsed}>
-                      {model.label}
-                    </option>
-                  )
-                })}
-              </select>
+                添加并选择
+              </Button>
             </div>
-          ))}
+          ) : null}
         </div>
 
         {modelStatus ? (

@@ -1,4 +1,5 @@
 import type { Issue, IssueSeverity } from '../../types/reviewReport.types'
+import { isSameConcreteIssue } from './issueSimilarity'
 import type { ModelJudgeOutput } from './llmJudgeEngine'
 
 const severityWeight: Record<IssueSeverity, number> = {
@@ -8,8 +9,26 @@ const severityWeight: Record<IssueSeverity, number> = {
   info: 1,
 }
 
+const MIN_SUCCESSFUL_MODELS_FOR_CONFIRMED = 2
+
 function groupKey(issue: Issue) {
   return `${issue.skill_id}:${issue.id}`
+}
+
+function isSameConcreteProblem(a: Issue, b: Issue) {
+  if (groupKey(a) === groupKey(b)) return true
+  return isSameConcreteIssue(a, b, { requireSameSkill: true })
+}
+
+function addToGroupedIssues(groups: Issue[][], issue: Issue) {
+  const existing = groups.find((items) =>
+    items.some((item) => isSameConcreteProblem(item, issue)),
+  )
+  if (existing) {
+    existing.push(issue)
+    return
+  }
+  groups.push([issue])
 }
 
 function pickRepresentative(issues: Issue[]) {
@@ -26,15 +45,12 @@ function pickRepresentative(issues: Issue[]) {
 
 export function aggregateVotes(outputs: ModelJudgeOutput[]): Issue[] {
   const validModelIds = outputs.filter((output) => !output.error).map((output) => output.modelId)
-  const groups = new Map<string, Issue[]>()
+  const groups: Issue[][] = []
 
   outputs.forEach((output) => {
     if (output.error) return
     output.issues.forEach((issue) => {
-      const key = groupKey(issue)
-      const items = groups.get(key) ?? []
-      items.push(issue)
-      groups.set(key, items)
+      addToGroupedIssues(groups, issue)
     })
   })
 
@@ -51,26 +67,22 @@ export function aggregateVotes(outputs: ModelJudgeOutput[]): Issue[] {
     ]
     const passed = validModelIds.filter((modelId) => !flaggedModelIds.includes(modelId))
 
-    if (chosen.status === 'not_applicable') {
-      aggregated.push({
-        ...chosen,
-        vote: {
-          models_flagged: [],
-          models_passed: [...new Set(issues.flatMap((issue) => issue.vote?.models_passed ?? []))],
-        },
-        fix: null,
-      })
-      return
-    }
+    if (chosen.status === 'not_applicable') return
 
     if (flaggedModelIds.length === 0) return
+    const confirmed =
+      validModelIds.length >= MIN_SUCCESSFUL_MODELS_FOR_CONFIRMED &&
+      flaggedModelIds.length > validModelIds.length / 2
     aggregated.push({
       ...chosen,
-      consensus: flaggedModelIds.length >= 2 ? 'confirmed' : 'single_model_flag',
+      consensus: confirmed ? 'confirmed' : 'single_model_flag',
       vote: {
         models_flagged: flaggedModelIds,
         models_passed: passed,
       },
+      raw_model_output_ids: [
+        ...new Set(issues.flatMap((issue) => issue.raw_model_output_ids ?? [])),
+      ],
       fix: chosen.fix ? { ...chosen.fix, fix_requires_review: true as const } : null,
     })
   })

@@ -1,6 +1,6 @@
 ---
 id: general_writing
-category: instruction_quality
+category: quality
 title: 通用写作
 version: 0.1
 execution_mode: llm_judge
@@ -18,6 +18,7 @@ conflicts_with: []
 ### WRITING-1 占位检查项
 检查：暂不启用。
 默认 severity：info
+evidence_type：stylistic_judgment
 fix 模板：无具体修复建议
 
 ## Golden Set

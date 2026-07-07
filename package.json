@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "verify:b1": "node scripts/verify-consolidation-b1.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

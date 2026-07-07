@@ -1,157 +1,201 @@
-import { BUTLER_CONSOLIDATION_SYSTEM_PROMPT } from '../../prompts/butlerCriticSystemPrompt'
+import {
+  BUTLER_CONSOLIDATION_B1_SYSTEM_PROMPT,
+  BUTLER_CONSOLIDATION_B2_SYSTEM_PROMPT,
+} from '../../prompts/butlerCriticSystemPrompt'
 import type {
-  EvidenceType,
-  Fix,
-  FixAction,
+  CandidateIssueGroup,
+  ConsolidationConflictNote,
+  ConsolidationSynthesisResult,
+  DocumentProfile,
   Issue,
-  IssueCategory,
-  IssueSeverity,
+  IssueGroup,
   ModelConfig,
-  ReviewConsolidation,
-  ScenarioAssumption,
+  RawModelOutput,
+  RawModelOutputPhase,
+  PrescriptionPriorityAction,
+  ReviewConsolidationResult,
+  ReviewPrescription,
 } from '../../types/reviewReport.types'
 import { getProviderAdapter } from '../modelProvider/providerAdapter'
 import { parseJsonObject } from '../responseRepair/autoRepairJson'
-import { retryWithErrorFeedback } from '../responseRepair/retryWithErrorFeedback'
+import { retryWithErrorFeedback, type RetryRawResponse } from '../responseRepair/retryWithErrorFeedback'
+import { formatDocumentProfileForPrompt } from './documentProfiler'
+import { issueGroupLooksSimilar } from './issueSimilarity'
+import { normalizeStrictIssue, type RawIssueCandidate } from './issueValidation'
 
-const EMPTY_CONSOLIDATION: ReviewConsolidation = {
-  has_new_findings: false,
+function emptyPrescription(overallAssessment = '复核完毕，未生成额外综合处方。'): ReviewPrescription {
+  return {
+    overall_assessment: overallAssessment,
+    priority_actions: [],
+    minor_notes: [],
+    revised_document_available: false,
+    revised_document_diff_summary: '未生成完整改后版本。',
+  }
+}
+
+const EMPTY_RESULT: ReviewConsolidationResult = {
   new_issues: [],
   conflict_notes: [],
-  systemic_findings: [],
+  synthesis_results: [],
+  prescription: emptyPrescription('最终把关未执行或未产生综合处方。'),
+  summary_note: '复核完毕，无新增问题。',
 }
 
-const CATEGORIES: IssueCategory[] = [
-  'clarity',
-  'contract',
-  'resource',
-  'interop',
-  'robustness',
-  'quality',
-  'compliance',
-]
-const SEVERITIES: IssueSeverity[] = ['critical', 'major', 'minor', 'info']
-const EVIDENCE_TYPES: EvidenceType[] = [
-  'explicit_conflict',
-  'explicit_omission',
-  'semantic_inference',
-  'stylistic_judgment',
-]
-const SCENARIO_ASSUMPTIONS: ScenarioAssumption[] = [
-  'inferred_from_text',
-  'user_provided',
-  'worst_case_default',
-]
-const FIX_ACTIONS: FixAction[] = [
-  'text_replace',
-  'text_insert',
-  'text_delete',
-  'config_change',
-  'constraint_removal',
-  'constraint_add',
-  'schema_add_field',
-  'reorder_section',
-]
+interface UnknownIssueList {
+  issues?: unknown
+}
 
-interface UnknownConsolidation {
-  has_new_findings?: unknown
+interface UnknownB2Result {
   new_issues?: unknown
   conflict_notes?: unknown
-  systemic_findings?: unknown
+  synthesis_results?: unknown
+  summary_note?: unknown
+  prescription?: unknown
 }
 
-interface UnknownIssue {
-  id?: unknown
-  skill_id?: unknown
-  category?: unknown
-  status?: unknown
-  severity?: unknown
-  evidence_type?: unknown
-  scenario_assumption?: unknown
-  location?: {
-    anchor_before?: unknown
-    anchor_after?: unknown
-    matched_text?: unknown
-    line_range?: unknown
-    ambiguous?: unknown
-  }
-  description?: unknown
-  fix?: unknown
+function buildConsolidationRawOutputs(params: {
+  reviewId: string
+  phase: RawModelOutputPhase
+  modelId: string
+  schemaName: string
+  rawResponses: RetryRawResponse[]
+}): RawModelOutput[] {
+  return params.rawResponses.map((response) => ({
+    id: crypto.randomUUID(),
+    review_id: params.reviewId,
+    phase: params.phase,
+    model_id: params.modelId,
+    attempt: response.attempt,
+    schema_name: params.schemaName,
+    created_at: new Date().toISOString(),
+    raw_response_text: response.rawResponseText,
+    extracted_content: response.extractedContent,
+  }))
 }
 
-function normalizeFix(value: unknown): Fix | null {
-  if (!value || typeof value !== 'object') return null
-  const candidate = value as Partial<Fix>
-  if (!candidate.action || !FIX_ACTIONS.includes(candidate.action)) return null
-  return {
-    action: candidate.action,
-    target: typeof candidate.target === 'string' ? candidate.target : undefined,
-    from: candidate.from,
-    to: candidate.to,
-    content: typeof candidate.content === 'string' ? candidate.content : undefined,
-    fix_requires_review: true,
-  }
-}
-
-function normalizeLineRange(value: unknown): [number, number] | undefined {
-  if (!Array.isArray(value) || value.length !== 2) return undefined
-  const start = Number(value[0])
-  const end = Number(value[1])
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return undefined
-  return [Math.max(1, Math.round(start)), Math.max(1, Math.round(end))]
-}
-
-function normalizeNewIssue(value: UnknownIssue, index: number, scenarioHint: string): Issue {
-  const category = CATEGORIES.includes(value.category as IssueCategory)
-    ? (value.category as IssueCategory)
-    : 'clarity'
-  const location = value.location ?? {}
-  return {
-    id: typeof value.id === 'string' && value.id ? `consolidation-${value.id}` : `consolidation-${index + 1}`,
-    skill_id: typeof value.skill_id === 'string' && value.skill_id ? value.skill_id : 'consolidation_reviewer',
-    category,
-    status: 'found',
-    severity: SEVERITIES.includes(value.severity as IssueSeverity)
-      ? (value.severity as IssueSeverity)
-      : 'major',
-    evidence_type: EVIDENCE_TYPES.includes(value.evidence_type as EvidenceType)
-      ? (value.evidence_type as EvidenceType)
-      : 'semantic_inference',
-    scenario_assumption: SCENARIO_ASSUMPTIONS.includes(value.scenario_assumption as ScenarioAssumption)
-      ? (value.scenario_assumption as ScenarioAssumption)
-      : scenarioHint.trim()
-        ? 'user_provided'
-        : 'inferred_from_text',
-    execution_mode: 'llm_judge',
-    domain_specific: false,
+function normalizeIssue(
+  value: RawIssueCandidate,
+  index: number,
+  modelId: string,
+  rawModelOutputIds: string[] = [],
+  targetSp?: string,
+): Issue | null {
+  return normalizeStrictIssue({
+    value,
+    fallbackId: `consolidation-${index + 1}`,
+    modelId,
+    executionMode: 'llm_judge',
+    domainSpecific: false,
     consensus: 'single_model_flag',
-    vote: {
-      models_flagged: ['consolidation_reviewer'],
-      models_passed: [],
-    },
-    location: {
-      anchor_before: typeof location.anchor_before === 'string' ? location.anchor_before : '',
-      anchor_after: typeof location.anchor_after === 'string' ? location.anchor_after : '',
-      matched_text: typeof location.matched_text === 'string' ? location.matched_text : undefined,
-      line_range: normalizeLineRange(location.line_range),
-      ambiguous: Boolean(location.ambiguous),
-    },
-    description: typeof value.description === 'string' && value.description
-      ? value.description
-      : '汇总复核发现一个疑似漏检问题。',
-    fix: normalizeFix(value.fix),
-  }
+    flaggedModelIds: value.status === 'found' ? [modelId] : [],
+    passedModelIds: value.status === 'found' ? [] : [modelId],
+    rawModelOutputIds,
+    fixRequiresReview: true,
+    targetSp,
+  })
 }
 
 function normalizeStringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 }
 
-function normalizeConsolidation(parsed: UnknownConsolidation, scenarioHint: string): ReviewConsolidation {
+function normalizeString(value: unknown, fallback = '') {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback
+}
+
+function normalizePriorityActions(value: unknown): PrescriptionPriorityAction[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item) => item && typeof item === 'object')
+    .map((item, index) => {
+      const candidate = item as Record<string, unknown>
+      const priority = Number(candidate.priority)
+      const nature = ['wording', 'flow', 'engineering', 'safety'].includes(candidate.nature as string)
+        ? (candidate.nature as 'wording' | 'flow' | 'engineering' | 'safety')
+        : undefined
+      const positionRelation = ['joint', 'independent'].includes(candidate.position_relation as string)
+        ? (candidate.position_relation as 'joint' | 'independent')
+        : undefined
+      return {
+        priority: Number.isFinite(priority) && priority >= 1 ? Math.round(priority) : index + 1,
+        action_summary: normalizeString(candidate.action_summary),
+        why: normalizeString(candidate.why),
+        related_issue_ids: normalizeStringArray(candidate.related_issue_ids),
+        conflicts_resolved: normalizeString(candidate.conflicts_resolved),
+        ...(nature ? { nature } : {}),
+        ...(normalizeString(candidate.grouping_logic) ? { grouping_logic: normalizeString(candidate.grouping_logic) } : {}),
+        ...(positionRelation ? { position_relation: positionRelation } : {}),
+      }
+    })
+    .filter((item) => item.action_summary && item.why)
+    .sort((a, b) => a.priority - b.priority)
+}
+
+function normalizePrescription(value: unknown): ReviewPrescription {
+  if (!value || typeof value !== 'object') {
+    return emptyPrescription('B2未返回有效综合处方。')
+  }
+
+  const candidate = value as Record<string, unknown>
+  const revisedDocumentAfter = normalizeString(candidate.revised_document_after) || undefined
+  const requestedRevisedDocument = candidate.revised_document_available === true
+  const revisedDocumentAvailable = Boolean(requestedRevisedDocument && revisedDocumentAfter)
+  const diffSummary = normalizeString(
+    candidate.revised_document_diff_summary,
+    revisedDocumentAvailable
+      ? 'B2生成了完整改后版本，需用户查看完整diff后确认。'
+      : '本次不适合自动生成完整改后版本。',
+  )
+
+  return {
+    overall_assessment: normalizeString(candidate.overall_assessment, 'B2未返回整体诊断结论。'),
+    priority_actions: normalizePriorityActions(candidate.priority_actions),
+    minor_notes: normalizeStringArray(candidate.minor_notes),
+    revised_document_available: revisedDocumentAvailable,
+    revised_document_diff_summary: requestedRevisedDocument && !revisedDocumentAvailable
+      ? `${diffSummary} B2声明可生成改后版本，但没有返回完整revised_document_after，系统已降级为不可用。`
+      : diffSummary,
+    ...(revisedDocumentAvailable ? { revised_document_after: revisedDocumentAfter } : {}),
+  }
+}
+
+function isNovelAgainstExisting(issue: Issue, issueGroups: IssueGroup[]) {
+  return !issueGroups.some((group) => issueGroupLooksSimilar(issue, group))
+}
+
+function isFoundIssue(issue: Issue | null): issue is Issue {
+  return Boolean(issue) && issue?.status === 'found'
+}
+
+function normalizeB1(
+  raw: string,
+  modelId: string,
+  rawModelOutputIds: string[],
+  issueGroups: IssueGroup[],
+  targetSp: string,
+): Issue[] {
+  const parsed = parseJsonObject<UnknownIssueList>(raw)
+  const issues = Array.isArray(parsed.issues) ? parsed.issues : []
+  return issues
+    .map((issue, index) => normalizeIssue(issue as RawIssueCandidate, index, modelId, rawModelOutputIds, targetSp))
+    .filter(isFoundIssue)
+    .filter((issue) => isNovelAgainstExisting(issue, issueGroups))
+}
+
+function normalizeB2(
+  parsed: UnknownB2Result,
+  modelId: string,
+  rawModelOutputIds: string[],
+  issueGroups: IssueGroup[],
+  targetSp?: string,
+): ReviewConsolidationResult {
   const newIssues = Array.isArray(parsed.new_issues)
-    ? parsed.new_issues.map((issue, index) => normalizeNewIssue(issue as UnknownIssue, index, scenarioHint))
+    ? parsed.new_issues.map((issue, index) =>
+        normalizeIssue(issue as RawIssueCandidate, index, modelId, rawModelOutputIds, targetSp),
+      ).filter(isFoundIssue)
+      .filter((issue) => isNovelAgainstExisting(issue, issueGroups))
     : []
-  const conflictNotes = Array.isArray(parsed.conflict_notes)
+  const conflictNotes: ConsolidationConflictNote[] = Array.isArray(parsed.conflict_notes)
     ? parsed.conflict_notes
         .filter((item) => item && typeof item === 'object')
         .map((item) => {
@@ -164,81 +208,172 @@ function normalizeConsolidation(parsed: UnknownConsolidation, scenarioHint: stri
         })
         .filter((item) => item.description && item.recommendation)
     : []
-  const systemicFindings = Array.isArray(parsed.systemic_findings)
-    ? parsed.systemic_findings
+  const synthesisResults: ConsolidationSynthesisResult[] = Array.isArray(parsed.synthesis_results)
+    ? parsed.synthesis_results
         .filter((item) => item && typeof item === 'object')
         .map((item) => {
           const candidate = item as Record<string, unknown>
           return {
-            related_issue_ids: normalizeStringArray(candidate.related_issue_ids),
-            description: typeof candidate.description === 'string' ? candidate.description : '',
-            severity: SEVERITIES.includes(candidate.severity as IssueSeverity)
-              ? (candidate.severity as IssueSeverity)
-              : 'major',
+            candidate_group_id: typeof candidate.candidate_group_id === 'string' ? candidate.candidate_group_id : '',
+            has_common_root_cause: Boolean(candidate.has_common_root_cause),
+            reason: typeof candidate.reason === 'string' ? candidate.reason : undefined,
+            synthesized_title: typeof candidate.synthesized_title === 'string' ? candidate.synthesized_title : undefined,
+            member_issue_ids: normalizeStringArray(candidate.member_issue_ids),
           }
         })
-        .filter((item) => item.description)
+        .filter((item) => item.candidate_group_id)
     : []
 
+  const hasMaterialChange =
+    newIssues.length > 0 ||
+    conflictNotes.length > 0 ||
+    synthesisResults.some((item) => item.has_common_root_cause)
+
   return {
-    has_new_findings: Boolean(parsed.has_new_findings) && newIssues.length > 0,
     new_issues: newIssues,
     conflict_notes: conflictNotes,
-    systemic_findings: systemicFindings,
+    synthesis_results: synthesisResults,
+    prescription: normalizePrescription(parsed.prescription),
+    summary_note: typeof parsed.summary_note === 'string' && parsed.summary_note
+      ? parsed.summary_note
+      : hasMaterialChange
+        ? '复核完毕，发现需要合并或补充的问题。'
+        : '复核完毕，无新增问题。',
   }
 }
 
-function buildPrompt(params: {
+export function buildConsolidationB1Prompt(targetSp: string, documentProfile?: DocumentProfile) {
+  const profileBlock = documentProfile ? `${formatDocumentProfileForPrompt(documentProfile)}\n\n` : ''
+  return `${profileBlock}<target_sp>
+${targetSp}
+</target_sp>`
+}
+
+function buildB2Prompt(params: {
   targetSp: string
-  scenarioHint: string
-  issues: Issue[]
+  documentProfile: DocumentProfile
+  independentIssues: Issue[]
+  issueGroups: IssueGroup[]
+  candidateGroups: CandidateIssueGroup[]
 }) {
-  return `<scenario_hint>
-${params.scenarioHint}
-</scenario_hint>
+  return `${formatDocumentProfileForPrompt(params.documentProfile)}
 
 <target_sp>
 ${params.targetSp}
 </target_sp>
 
-<preliminary_issues>
-${JSON.stringify(params.issues, null, 2)}
-</preliminary_issues>`
+<independent_b1_issues>
+${JSON.stringify(params.independentIssues, null, 2)}
+</independent_b1_issues>
+
+<confirmed_issue_groups>
+${JSON.stringify(params.issueGroups, null, 2)}
+</confirmed_issue_groups>
+
+<candidate_groups>
+${JSON.stringify(params.candidateGroups, null, 2)}
+</candidate_groups>`
 }
 
 export async function runConsolidationReview(params: {
   targetSp: string
   scenarioHint: string
-  issues: Issue[]
+  documentProfile: DocumentProfile
+  issueGroups: IssueGroup[]
+  candidateGroups: CandidateIssueGroup[]
   model: ModelConfig | null
   apiKey: string | null
+  reviewId: string
+  onRawModelOutputs?: (outputs: RawModelOutput[]) => void
   signal?: AbortSignal
-}): Promise<ReviewConsolidation> {
-  if (!params.model || !params.apiKey) return EMPTY_CONSOLIDATION
+}): Promise<ReviewConsolidationResult> {
+  if (!params.model || !params.apiKey) return EMPTY_RESULT
 
   try {
     const adapter = getProviderAdapter(params.model.provider)
-    const request = {
-      baseUrl: params.model.baseUrl,
-      apiKey: params.apiKey,
-      modelId: params.model.modelId,
-      signal: params.signal,
-      messages: [
-        { role: 'system' as const, content: BUTLER_CONSOLIDATION_SYSTEM_PROMPT },
-        { role: 'user' as const, content: buildPrompt(params) },
-      ],
-    }
-    const content = await retryWithErrorFeedback({
+    const b1SchemaName = 'IndependentIssueList'
+    const b1Result = await retryWithErrorFeedback({
       adapter,
-      request,
-      schemaName: 'ReviewConsolidation',
+      request: {
+        baseUrl: params.model.baseUrl,
+        apiKey: params.apiKey,
+        modelId: params.model.modelId,
+        signal: params.signal,
+        messages: [
+          { role: 'system', content: BUTLER_CONSOLIDATION_B1_SYSTEM_PROMPT },
+          { role: 'user', content: buildConsolidationB1Prompt(params.targetSp, params.documentProfile) },
+        ],
+      },
+      schemaName: b1SchemaName,
       validate: (raw) => {
-        const parsed = parseJsonObject<UnknownConsolidation>(raw)
-        if (!Array.isArray(parsed.new_issues)) throw new Error('缺少 new_issues 数组')
+        const parsed = parseJsonObject<UnknownIssueList>(raw)
+        if (!Array.isArray(parsed.issues)) throw new Error('缺少 issues 数组')
       },
     })
-    return normalizeConsolidation(parseJsonObject<UnknownConsolidation>(content), params.scenarioHint)
+    const b1RawOutputs = buildConsolidationRawOutputs({
+      reviewId: params.reviewId,
+      phase: 'consolidation_b1',
+      modelId: params.model.modelId,
+      schemaName: b1SchemaName,
+      rawResponses: b1Result.rawResponses,
+    })
+    params.onRawModelOutputs?.(b1RawOutputs)
+    const independentIssues = normalizeB1(
+      b1Result.content,
+      params.model.modelId,
+      b1RawOutputs.map((output) => output.id),
+      params.issueGroups,
+      params.targetSp,
+    )
+
+    const b2SchemaName = 'ConsolidationB2Result'
+    const b2Result = await retryWithErrorFeedback({
+      adapter,
+      request: {
+        baseUrl: params.model.baseUrl,
+        apiKey: params.apiKey,
+        modelId: params.model.modelId,
+        signal: params.signal,
+        messages: [
+          { role: 'system', content: BUTLER_CONSOLIDATION_B2_SYSTEM_PROMPT },
+          {
+            role: 'user',
+            content: buildB2Prompt({
+              targetSp: params.targetSp,
+              documentProfile: params.documentProfile,
+              independentIssues,
+              issueGroups: params.issueGroups,
+              candidateGroups: params.candidateGroups,
+            }),
+          },
+        ],
+      },
+      schemaName: b2SchemaName,
+      validate: (raw) => {
+        const parsed = parseJsonObject<UnknownB2Result>(raw)
+        if (!Array.isArray(parsed.new_issues)) throw new Error('缺少 new_issues 数组')
+        if (!Array.isArray(parsed.conflict_notes)) throw new Error('缺少 conflict_notes 数组')
+        if (!Array.isArray(parsed.synthesis_results)) throw new Error('缺少 synthesis_results 数组')
+        if (!parsed.prescription || typeof parsed.prescription !== 'object') throw new Error('缺少 prescription 对象')
+      },
+    })
+    const b2RawOutputs = buildConsolidationRawOutputs({
+      reviewId: params.reviewId,
+      phase: 'consolidation_b2',
+      modelId: params.model.modelId,
+      schemaName: b2SchemaName,
+      rawResponses: b2Result.rawResponses,
+    })
+    params.onRawModelOutputs?.(b2RawOutputs)
+
+    return normalizeB2(
+      parseJsonObject<UnknownB2Result>(b2Result.content),
+      params.model.modelId,
+      b2RawOutputs.map((output) => output.id),
+      params.issueGroups,
+      params.targetSp,
+    )
   } catch {
-    return EMPTY_CONSOLIDATION
+    return EMPTY_RESULT
   }
 }

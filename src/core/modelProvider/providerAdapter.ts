@@ -15,8 +15,23 @@ export interface ChatCompletionRequest {
   signal?: AbortSignal
 }
 
+export interface ChatCompletionResult {
+  content: string
+  rawResponseText: string
+}
+
+export class ModelProviderError extends Error {
+  rawResponseText?: string
+
+  constructor(message: string, rawResponseText?: string) {
+    super(message)
+    this.name = 'ModelProviderError'
+    this.rawResponseText = rawResponseText
+  }
+}
+
 export interface ProviderAdapter {
-  chatCompletion(request: ChatCompletionRequest): Promise<string>
+  chatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResult>
 }
 
 export const DEFAULT_OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'

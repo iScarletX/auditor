@@ -1,225 +1,655 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://butler.local/schemas/review-report.v2.schema.json",
+  "$id": "https://butler.local/schemas/review-report.schema.json",
   "title": "ReviewReport",
   "type": "object",
-  "required": ["meta", "issues", "consolidation", "summary"],
+  "required": [
+    "meta",
+    "document_profile",
+    "prescription",
+    "incomplete_checks",
+    "issues",
+    "raw_model_outputs",
+    "summary",
+    "check_plan"
+  ],
   "additionalProperties": false,
   "properties": {
     "meta": {
       "type": "object",
-      "required": ["target_sp_hash", "scenario_hint", "skills_run", "models_used", "timestamp"],
+      "required": [
+        "target_sp_hash",
+        "review_id",
+        "skills_run",
+        "models_used",
+        "expected_skill_model_calls",
+        "actual_skill_model_calls",
+        "consolidation_model",
+        "consolidation_model_source",
+        "timestamp",
+        "scenario_hint"
+      ],
       "additionalProperties": false,
       "properties": {
-        "target_sp_hash": { "type": "string" },
-        "scenario_hint": { "type": "string" },
-        "skills_run": { "type": "array", "items": { "type": "string" } },
-        "models_used": { "type": "array", "items": { "type": "string" } },
-        "timestamp": { "type": "string", "format": "date-time" },
-        "review_duration_ms": { "type": "integer", "minimum": 0 }
+        "review_id": {
+          "type": "string"
+        },
+        "target_sp_hash": {
+          "type": "string"
+        },
+        "skills_run": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "models_used": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected_skill_model_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "actual_skill_model_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "consolidation_model": {
+          "type": "string"
+        },
+        "consolidation_model_source": {
+          "type": "string",
+          "enum": [
+            "auto_selected",
+            "user_specified"
+          ]
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "review_duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scenario_hint": {
+          "type": "string"
+        }
       }
     },
     "issues": {
       "type": "array",
-      "items": { "$ref": "#/definitions/Issue" }
+      "items": {
+        "$ref": "#/definitions/IssueGroup"
+      }
     },
-    "consolidation": { "$ref": "#/definitions/ReviewConsolidation" },
+    "document_profile": {
+      "$ref": "#/definitions/DocumentProfile"
+    },
+    "prescription": {
+      "$ref": "#/definitions/ReviewPrescription"
+    },
+    "incomplete_checks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/IncompleteCheck"
+      }
+    },
+    "raw_model_outputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/RawModelOutput"
+      }
+    },
     "summary": {
       "type": "object",
       "required": [
         "overall_score",
         "issue_count_by_severity",
-        "issue_count_by_category",
-        "not_applicable_count"
+        "issue_count_by_category"
       ],
       "additionalProperties": false,
       "properties": {
-        "overall_score": { "type": "number", "minimum": 0, "maximum": 100 },
+        "overall_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
         "issue_count_by_severity": {
           "type": "object",
-          "required": ["critical", "major", "minor", "info"],
+          "required": [
+            "严重",
+            "中等",
+            "轻微"
+          ],
           "additionalProperties": false,
           "properties": {
-            "critical": { "type": "integer", "minimum": 0 },
-            "major": { "type": "integer", "minimum": 0 },
-            "minor": { "type": "integer", "minimum": 0 },
-            "info": { "type": "integer", "minimum": 0 }
+            "严重": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "中等": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "轻微": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         },
         "issue_count_by_category": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "clarity": { "type": "integer", "minimum": 0 },
-            "contract": { "type": "integer", "minimum": 0 },
-            "resource": { "type": "integer", "minimum": 0 },
-            "interop": { "type": "integer", "minimum": 0 },
-            "robustness": { "type": "integer", "minimum": 0 },
-            "quality": { "type": "integer", "minimum": 0 },
-            "compliance": { "type": "integer", "minimum": 0 }
+            "clarity": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "contract": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "resource": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "interop": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "robustness": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "quality": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "compliance": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
-        },
-        "not_applicable_count": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "check_plan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "skill_id",
+          "skill_title",
+          "decision",
+          "reason"
+        ],
+        "properties": {
+          "skill_id": {
+            "type": "string"
+          },
+          "skill_title": {
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "run",
+              "skip"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "fix_plans": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action_priority",
+          "apply_mode",
+          "edits"
+        ],
+        "properties": {
+          "action_priority": {
+            "type": "number"
+          },
+          "apply_mode": {
+            "enum": [
+              "independent",
+              "group"
+            ]
+          },
+          "group_note": {
+            "type": "string"
+          },
+          "edits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "before_text",
+                "after_text",
+                "note"
+              ],
+              "properties": {
+                "before_text": {
+                  "type": "string"
+                },
+                "after_text": {
+                  "type": "string"
+                },
+                "note": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "no_fix_reason": {
+            "type": "string"
+          }
+        }
       }
     }
   },
   "definitions": {
-    "ReviewConsolidation": {
+    "IncompleteCheck": {
       "type": "object",
-      "required": ["has_new_findings", "new_issues", "conflict_notes", "systemic_findings"],
+      "required": [
+        "skill_id",
+        "skill_title",
+        "expected_model_ids",
+        "failed_model_ids",
+        "error_messages"
+      ],
       "additionalProperties": false,
       "properties": {
-        "has_new_findings": { "type": "boolean" },
-        "new_issues": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/Issue" }
+        "skill_id": {
+          "type": "string"
         },
-        "conflict_notes": {
+        "skill_title": {
+          "type": "string"
+        },
+        "expected_model_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "failed_model_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "error_messages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "DocumentProfile": {
+      "type": "object",
+      "required": [
+        "document_purpose",
+        "output_consumer",
+        "declared_exclusions",
+        "internal_conventions",
+        "interaction_mode",
+        "confidence_note"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "document_purpose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "output_consumer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "declared_exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "internal_conventions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "interaction_mode": {
+          "type": "string",
+          "enum": [
+            "single_turn",
+            "multi_turn",
+            "unknown"
+          ]
+        },
+        "confidence_note": {
+          "type": "string"
+        }
+      }
+    },
+    "ReviewPrescription": {
+      "type": "object",
+      "required": [
+        "overall_assessment",
+        "priority_actions",
+        "minor_notes",
+        "revised_document_available",
+        "revised_document_diff_summary"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "overall_assessment": {
+          "type": "string",
+          "minLength": 1
+        },
+        "priority_actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PrescriptionPriorityAction"
+          }
+        },
+        "minor_notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "revised_document_available": {
+          "type": "boolean"
+        },
+        "revised_document_diff_summary": {
+          "type": "string"
+        },
+        "revised_document_after": {
+          "type": "string"
+        }
+      }
+    },
+    "PrescriptionPriorityAction": {
+      "type": "object",
+      "required": [
+        "priority",
+        "action_summary",
+        "why",
+        "related_issue_ids",
+        "conflicts_resolved"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "priority": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "action_summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "why": {
+          "type": "string",
+          "minLength": 1
+        },
+        "related_issue_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "conflicts_resolved": {
+          "type": "string"
+        },
+        "nature": {
+          "enum": [
+            "wording",
+            "flow",
+            "engineering",
+            "safety"
+          ]
+        },
+        "grouping_logic": {
+          "type": "string"
+        },
+        "position_relation": {
+          "enum": [
+            "joint",
+            "independent"
+          ]
+        }
+      }
+    },
+    "IssueGroup": {
+      "type": "object",
+      "required": [
+        "id",
+        "merge_type",
+        "title",
+        "category",
+        "severity_display",
+        "confidence_display",
+        "locations",
+        "description",
+        "fix_items",
+        "related_skill_ids",
+        "domain_specific"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "merge_type": {
+          "type": "string",
+          "enum": [
+            "single",
+            "same_skill_multi_location",
+            "duplicate_content_merge",
+            "systemic_synthesis"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "related_skill_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "clarity",
+            "contract",
+            "resource",
+            "interop",
+            "robustness",
+            "quality",
+            "compliance"
+          ]
+        },
+        "severity_display": {
+          "type": "string",
+          "enum": [
+            "严重",
+            "中等",
+            "轻微"
+          ]
+        },
+        "confidence_display": {
+          "type": "string",
+          "enum": [
+            "高",
+            "中",
+            "仅供参考"
+          ]
+        },
+        "domain_specific": {
+          "type": "boolean"
+        },
+        "locations": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["issue_ids", "description", "recommendation"],
+            "required": [
+              "marker_index",
+              "anchor_before",
+              "anchor_after",
+              "ambiguous"
+            ],
             "additionalProperties": false,
             "properties": {
-              "issue_ids": { "type": "array", "items": { "type": "string" } },
-              "description": { "type": "string" },
-              "recommendation": { "type": "string" }
+              "marker_index": {
+                "type": "integer"
+              },
+              "anchor_before": {
+                "type": "string"
+              },
+              "anchor_after": {
+                "type": "string"
+              },
+              "matched_text": {
+                "type": "string"
+              },
+              "ambiguous": {
+                "type": "boolean"
+              },
+              "source_issue_id": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
             }
           }
         },
-        "systemic_findings": {
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "raw_model_output_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "profile_conflict": {
+          "type": "boolean",
+          "const": true
+        },
+        "profile_conflict_detail": {
+          "type": "string"
+        },
+        "fix_items": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["related_issue_ids", "description", "severity"],
+            "required": [
+              "marker_index",
+              "fix",
+              "fix_requires_review"
+            ],
             "additionalProperties": false,
             "properties": {
-              "related_issue_ids": { "type": "array", "items": { "type": "string" } },
-              "description": { "type": "string" },
-              "severity": { "$ref": "#/definitions/IssueSeverity" }
+              "marker_index": {
+                "type": "integer"
+              },
+              "fix": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/definitions/Fix"
+                  }
+                ]
+              },
+              "fix_requires_review": {
+                "type": "boolean",
+                "const": true
+              }
             }
           }
         }
       }
     },
-    "Issue": {
+    "RawModelOutput": {
       "type": "object",
       "required": [
         "id",
-        "skill_id",
-        "category",
-        "status",
-        "location",
-        "description",
-        "fix"
+        "review_id",
+        "phase",
+        "model_id",
+        "attempt",
+        "schema_name",
+        "created_at",
+        "raw_response_text"
       ],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string" },
-        "skill_id": { "type": "string" },
-        "category": { "$ref": "#/definitions/IssueCategory" },
-        "status": {
-          "type": "string",
-          "enum": ["found", "not_applicable"]
+        "id": {
+          "type": "string"
         },
-        "severity": { "$ref": "#/definitions/IssueSeverity" },
-        "evidence_type": {
+        "review_id": {
+          "type": "string"
+        },
+        "phase": {
           "type": "string",
           "enum": [
-            "explicit_conflict",
-            "explicit_omission",
-            "semantic_inference",
-            "stylistic_judgment"
+            "document_profile",
+            "skill_check",
+            "consolidation_b1",
+            "consolidation_b2",
+            "fix_plan"
           ]
         },
-        "scenario_assumption": {
+        "skill_id": {
+          "type": "string"
+        },
+        "skill_title": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "schema_name": {
+          "type": "string"
+        },
+        "created_at": {
           "type": "string",
-          "enum": ["inferred_from_text", "user_provided", "worst_case_default"]
+          "format": "date-time"
         },
-        "not_applicable_reason": { "type": "string" },
-        "execution_mode": {
-          "type": "string",
-          "enum": ["static_check", "llm_judge", "hybrid"]
+        "raw_response_text": {
+          "type": "string"
         },
-        "domain_specific": { "type": "boolean" },
-        "consensus": {
-          "type": "string",
-          "enum": ["confirmed", "single_model_flag", "static_check_deterministic"]
-        },
-        "vote": {
-          "type": "object",
-          "required": ["models_flagged", "models_passed"],
-          "additionalProperties": false,
-          "properties": {
-            "models_flagged": { "type": "array", "items": { "type": "string" } },
-            "models_passed": { "type": "array", "items": { "type": "string" } }
-          }
-        },
-        "location": {
-          "type": "object",
-          "required": ["anchor_before", "anchor_after", "ambiguous"],
-          "additionalProperties": false,
-          "properties": {
-            "anchor_before": { "type": "string" },
-            "anchor_after": { "type": "string" },
-            "matched_text": { "type": "string" },
-            "line_range": {
-              "type": "array",
-              "items": { "type": "integer" },
-              "minItems": 2,
-              "maxItems": 2
-            },
-            "ambiguous": { "type": "boolean" }
-          }
-        },
-        "description": { "type": "string", "minLength": 1 },
-        "fix": {
-          "oneOf": [
-            { "type": "null" },
-            { "$ref": "#/definitions/Fix" }
-          ]
+        "extracted_content": {
+          "type": "string"
         }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": { "status": { "const": "found" } },
-            "required": ["status"]
-          },
-          "then": {
-            "required": ["severity", "evidence_type", "scenario_assumption"]
-          }
-        },
-        {
-          "if": {
-            "properties": { "status": { "const": "not_applicable" } },
-            "required": ["status"]
-          },
-          "then": {
-            "required": ["not_applicable_reason"]
-          }
-        }
-      ]
-    },
-    "IssueCategory": {
-      "type": "string",
-      "enum": [
-        "clarity",
-        "contract",
-        "resource",
-        "interop",
-        "robustness",
-        "quality",
-        "compliance"
-      ]
-    },
-    "IssueSeverity": {
-      "type": "string",
-      "enum": ["critical", "major", "minor", "info"]
+      }
     },
     "Fix": {
       "type": "object",
-      "required": ["action", "fix_requires_review"],
+      "required": [
+        "action"
+      ],
       "additionalProperties": false,
       "properties": {
         "action": {
@@ -235,11 +665,14 @@
             "reorder_section"
           ]
         },
-        "target": { "type": "string" },
+        "target": {
+          "type": "string"
+        },
         "from": {},
         "to": {},
-        "content": { "type": "string" },
-        "fix_requires_review": { "type": "boolean", "const": true }
+        "content": {
+          "type": "string"
+        }
       }
     }
   }

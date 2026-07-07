@@ -6,9 +6,10 @@ import { Button } from '../ui/Button'
 
 interface SkillEditorProps {
   onSkillAdded: (skill: SkillDefinition) => void
+  label?: string
 }
 
-export function SkillEditor({ onSkillAdded }: SkillEditorProps) {
+export function SkillEditor({ onSkillAdded, label = '上传自定义 Skill' }: SkillEditorProps) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [messages, setMessages] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
@@ -53,7 +54,7 @@ export function SkillEditor({ onSkillAdded }: SkillEditorProps) {
         onClick={() => inputRef.current?.click()}
       >
         <Upload className="h-4 w-4" />
-        上传自定义 Skill
+        {label}
       </Button>
       {messages.length > 0 ? (
         <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">

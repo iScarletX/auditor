@@ -1,6 +1,6 @@
 ---
 id: code_generation
-category: engineering_contract
+category: contract
 title: 代码生成
 version: 0.1
 execution_mode: llm_judge
@@ -18,6 +18,7 @@ conflicts_with: []
 ### CODE-1 占位检查项
 检查：暂不启用。
 默认 severity：info
+evidence_type：semantic_inference
 fix 模板：无具体修复建议
 
 ## Golden Set

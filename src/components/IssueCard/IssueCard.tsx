@@ -1,124 +1,67 @@
-import { ChevronDown, GitCompareArrows } from 'lucide-react'
-import { useState } from 'react'
-import { truncateMiddle } from '../../lib/utils'
-import type { EvidenceType, Issue, ScenarioAssumption } from '../../types/reviewReport.types'
+import { AlertTriangle, ChevronRight } from 'lucide-react'
+import type { IssueGroup } from '../../types/reviewReport.types'
+import { cn } from '../../lib/utils'
+import { CATEGORY_LABELS } from '../../lib/categoryLabels'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
 
 interface IssueCardProps {
-  issue: Issue
-  onPreviewFix: (issue: Issue) => void
+  issue: IssueGroup
+  onOpen: (issue: IssueGroup) => void
 }
+
+const categoryLabel = CATEGORY_LABELS
 
 const severityClass = {
-  critical: 'border-red-200 bg-red-50 text-red-700',
-  major: 'border-amber-200 bg-amber-50 text-amber-800',
-  minor: 'border-sky-200 bg-sky-50 text-sky-700',
-  info: 'border-slate-200 bg-slate-50 text-slate-600',
+  严重: 'border-red-200 bg-red-50 text-red-700',
+  中等: 'border-amber-200 bg-amber-50 text-amber-800',
+  轻微: 'border-slate-200 bg-slate-50 text-slate-600',
 }
 
-const severityLabel = {
-  critical: '严重',
-  major: '较重',
-  minor: '轻微',
-  info: '提示',
+function mergeHint(issue: IssueGroup) {
+  if (issue.merge_type === 'same_skill_multi_location') return '多处命中，展开可逐处查看'
+  if (issue.merge_type === 'duplicate_content_merge') return '多项检查同时触发'
+  if (issue.merge_type === 'systemic_synthesis') return '基于多处线索归纳'
+  return null
 }
 
-const evidenceLabel: Record<EvidenceType, string> = {
-  explicit_conflict: '显式冲突',
-  explicit_omission: '显式遗漏',
-  semantic_inference: '语义推断',
-  stylistic_judgment: '风格判断',
-}
-
-const scenarioLabel: Record<ScenarioAssumption, string> = {
-  inferred_from_text: '从文本推断',
-  user_provided: '用户场景',
-  worst_case_default: '保守假设',
-}
-
-export function IssueCard({ issue, onPreviewFix }: IssueCardProps) {
-  const [open, setOpen] = useState(false)
-  const isNotApplicable = issue.status === 'not_applicable'
-  const severity = issue.severity ?? 'info'
-  const isSingleDomain = issue.domain_specific && issue.consensus === 'single_model_flag'
-  const flagged = issue.vote?.models_flagged ?? []
-  const passed = issue.vote?.models_passed ?? []
+export function IssueCard({ issue, onOpen }: IssueCardProps) {
+  const hint = mergeHint(issue)
 
   return (
-    <article className={`rounded-md border p-4 ${isNotApplicable ? 'border-slate-200 bg-slate-50' : 'border-slate-200 bg-white'}`}>
-      <button
-        type="button"
-        className="flex w-full items-start justify-between gap-3 text-left"
-        onClick={() => setOpen((value) => !value)}
-      >
+    <article
+      className={cn(
+        'rounded-lg border bg-white p-4',
+        issue.profile_conflict ? 'border-violet-200 bg-violet-50/40' : 'border-slate-200',
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
-            {isNotApplicable ? (
-              <Badge className="border-slate-200 bg-white text-slate-500">不适用</Badge>
-            ) : (
-              <Badge className={severityClass[severity]}>{severityLabel[severity]}</Badge>
-            )}
-            <Badge>{issue.skill_id}</Badge>
-            {issue.consensus ? (
-              <Badge>
-                {issue.consensus === 'confirmed'
-                  ? '多模型确认'
-                  : issue.consensus === 'static_check_deterministic'
-                    ? '静态确定'
-                    : '单模型标记'}
+            <Badge className={severityClass[issue.severity_display]}>{issue.severity_display}</Badge>
+            <Badge>{categoryLabel[issue.category]}</Badge>
+            <Badge>可信度 {issue.confidence_display}</Badge>
+            {hint ? <Badge>{hint}</Badge> : null}
+            {issue.profile_conflict ? (
+              <Badge className="border-violet-200 bg-violet-50 text-violet-700">
+                <AlertTriangle className="mr-1 h-3 w-3" />
+                画像待核实
               </Badge>
             ) : null}
-            {issue.evidence_type ? <Badge>{evidenceLabel[issue.evidence_type]}</Badge> : null}
           </div>
-          <h3 className="text-sm font-semibold leading-6 text-slate-950">{issue.description}</h3>
+          <h3 className="text-sm font-semibold leading-6 text-slate-950">{issue.title}</h3>
+          {issue.profile_conflict ? (
+            <p className="rounded-md border border-violet-200 bg-white px-3 py-2 text-xs leading-5 text-violet-800">
+              此判断与文档画像存在矛盾，建议优先核实。{issue.profile_conflict_detail}
+            </p>
+          ) : null}
+          <p className="line-clamp-2 text-xs leading-5 text-slate-600">{issue.description}</p>
         </div>
-        <ChevronDown className={`mt-1 h-4 w-4 shrink-0 text-slate-400 transition ${open ? 'rotate-180' : ''}`} />
-      </button>
-
-      {open ? (
-        <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">
-          {isSingleDomain ? (
-            <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
-              该问题来自专业领域检查，仅一个模型给出判断，但可能是该模型更专业。
-            </div>
-          ) : null}
-          {isNotApplicable && issue.not_applicable_reason ? (
-            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-              {issue.not_applicable_reason}
-            </div>
-          ) : null}
-          <div className="grid gap-2 text-xs text-slate-600">
-            <div>
-              <span className="font-medium text-slate-800">定位：</span>
-              {truncateMiddle(
-                `${issue.location.anchor_before}${issue.location.matched_text ?? ''}${issue.location.anchor_after}`,
-                160,
-              )}
-            </div>
-            {issue.scenario_assumption ? (
-              <div>
-                <span className="font-medium text-slate-800">场景依据：</span>
-                {scenarioLabel[issue.scenario_assumption]}
-              </div>
-            ) : null}
-            <div>
-              <span className="font-medium text-slate-800">投票：</span>
-              flagged {flagged.join(', ') || '-'} / passed {passed.join(', ') || '-'}
-            </div>
-          </div>
-          {issue.status === 'found' && issue.fix ? (
-            <Button type="button" variant="secondary" size="sm" onClick={() => onPreviewFix(issue)}>
-              <GitCompareArrows className="h-4 w-4" />
-              查看修改建议
-            </Button>
-          ) : issue.status === 'found' ? (
-            <div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
-              此问题无具体修改建议，需要人工重新设计。
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+        <Button type="button" size="sm" variant="secondary" onClick={() => onOpen(issue)}>
+          查看详情
+          <ChevronRight className="h-4 w-4" />
+        </Button>
+      </div>
     </article>
   )
 }

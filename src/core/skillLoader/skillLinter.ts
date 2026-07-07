@@ -15,14 +15,6 @@ const CATEGORIES: IssueCategory[] = [
   'compliance',
 ]
 
-const LEGACY_CATEGORY_MAP: Record<string, IssueCategory> = {
-  engineering_contract: 'resource',
-  instruction_quality: 'clarity',
-  structure: 'clarity',
-  io_contract: 'contract',
-  quality_control: 'quality',
-}
-
 export interface SkillLintResult {
   ok: boolean
   errors: string[]
@@ -104,9 +96,7 @@ export function lintSkillFile(
     errors.push(`execution_mode 必须是 ${EXECUTION_MODES.join(' / ')} 之一`)
   }
 
-  const category = typeof data.category === 'string' && LEGACY_CATEGORY_MAP[data.category]
-    ? LEGACY_CATEGORY_MAP[data.category]
-    : data.category
+  const category = data.category
   if (typeof category === 'string' && !CATEGORIES.includes(category as IssueCategory)) {
     errors.push(`category 必须是 ${CATEGORIES.join(' / ')} 之一`)
   }
@@ -129,6 +119,9 @@ export function lintSkillFile(
       if (!/检查(?:（[^）]+）)?：/.test(item)) errors.push(`${title} 缺少 "检查：" 描述`)
       if (!item.includes('默认 severity：')) {
         errors.push(`${title} 缺少 "默认 severity：" 声明`)
+      }
+      if (!item.includes('evidence_type：')) {
+        errors.push(`${title} 缺少 "evidence_type：" 声明`)
       }
       if (!item.includes('fix 模板：') && !item.includes('无具体修复建议')) {
         errors.push(`${title} 缺少 "fix 模板：" 或 "无具体修复建议"`)

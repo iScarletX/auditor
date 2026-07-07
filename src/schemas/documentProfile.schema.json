@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://butler.local/schemas/document-profile.schema.json",
+  "title": "DocumentProfile",
+  "type": "object",
+  "required": [
+    "document_purpose",
+    "output_consumer",
+    "declared_exclusions",
+    "internal_conventions",
+    "interaction_mode",
+    "confidence_note"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "document_purpose": { "type": "string", "minLength": 1 },
+    "output_consumer": { "type": "string", "minLength": 1 },
+    "declared_exclusions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "internal_conventions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "interaction_mode": {
+      "type": "string",
+      "enum": ["single_turn", "multi_turn", "unknown"]
+    },
+    "confidence_note": { "type": "string" }
+  }
+}

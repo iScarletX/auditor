@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# 跑测报告产物：留本地，不进存档（结论转 docs）
+audit-exports/
