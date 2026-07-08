@@ -110,6 +110,7 @@ export type IssueMergeType =
   | 'same_skill_multi_location'
   | 'duplicate_content_merge'
   | 'systemic_synthesis'
+  | 'cross_skill_same_location'
 
 export interface IssueGroupLocation {
   marker_index: number

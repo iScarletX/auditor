@@ -287,6 +287,101 @@ function findDuplicatePair(issues: Issue[], semanticLookup?: SemanticSimilarityL
   return bestPair
 }
 
+// ============ S2: 位置归堆(cross_skill_same_location) ============
+// 目的：把「去重后剩余的 issue 里，来自不同检查项但指向同一段原文的多个独立发现」
+// 聚合成一张卡（卡内列多个子发现 + 各自的 reason），而不是散成多条展示。
+// 策略：Union-Find 传递闭包——A-B 位置重叠、B-C 位置重叠 → A/B/C 同组（无需 A-C 直接重叠）。
+// 阈值：locationOverlap >= 0.40（仅判「同一区域」，比 duplicate_content_merge 的 0.55 宽松；
+//       不要求描述相似，因为这类 issue 正是「同位置、不同角度的独立分析」）。
+
+const LOCATION_CLUSTER_THRESHOLD = 0.40
+
+/** 简易 Union-Find（非递归路径压缩版，适配小数组） */
+function makeUnionFind(n: number) {
+  const parent = Array.from({ length: n }, (_, i) => i)
+  function find(x: number): number {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]!]! // 路径减半
+      x = parent[x]!
+    }
+    return x
+  }
+  function union(x: number, y: number) {
+    const rx = find(x)
+    const ry = find(y)
+    if (rx !== ry) parent[rx] = ry
+  }
+  function collectGroups(): Map<number, number[]> {
+    const map = new Map<number, number[]>()
+    for (let i = 0; i < n; i += 1) {
+      const root = find(i)
+      const members = map.get(root) ?? []
+      members.push(i)
+      map.set(root, members)
+    }
+    return map
+  }
+  return { find, union, collectGroups }
+}
+
+/**
+ * 对剩余 issue 做位置聚类，返回「需要归堆」的分组（每组 >= 2 条，且来自不同检查项）。
+ * 同一检查项内部多条 issue 的情况，交给下游 same_skill_multi_location 逻辑处理，这里跳过。
+ */
+function findLocationClusters(issues: Issue[]): Issue[][] {
+  const n = issues.length
+  if (n < 2) return []
+
+  const uf = makeUnionFind(n)
+
+  for (let i = 0; i < n; i += 1) {
+    for (let j = i + 1; j < n; j += 1) {
+      const a = issues[i]!
+      const b = issues[j]!
+      // 同一检查项内部不在这里处理
+      if (a.skill_id === b.skill_id) continue
+      if (locationOverlap(a, b) >= LOCATION_CLUSTER_THRESHOLD) {
+        uf.union(i, j)
+      }
+    }
+  }
+
+  const result: Issue[][] = []
+  uf.collectGroups().forEach((indices) => {
+    if (indices.length < 2) return
+    const cluster = indices.map((i) => issues[i]!)
+    // 过滤掉「所有 issue 都来自同一检查项」的分组（那是 same_skill_multi_location 的活）
+    const distinctSkills = new Set(cluster.map((issue) => issue.skill_id))
+    if (distinctSkills.size < 2) return
+    result.push(cluster)
+  })
+
+  return result
+}
+
+/**
+ * 为跨检查项归堆组生成标题：取最长的 matched_text 片段作为位置代表。
+ */
+function crossSkillGroupTitle(issues: Issue[]): string {
+  const texts = issues
+    .map((issue) => (issue.location.matched_text ?? issue.location.anchor_before ?? '').trim().slice(0, 30))
+    .filter(Boolean)
+  const longest = texts.reduce((best, t) => (t.length > best.length ? t : best), '')
+  return longest ? `「${longest}」的多角度问题` : '同一位置的多角度问题'
+}
+
+/**
+ * 为跨检查项归堆组生成 description：列出各检查项标题 + 各自的具体判断，
+ * 便于用户一眼知道「哪几个检查项在这里各说了什么」。
+ */
+function crossSkillGroupDescription(issues: Issue[], skillMap: Map<string, SkillDefinition>): string {
+  const lines = issues.map((issue) => {
+    const title = skillTitle(skillMap, issue.skill_id)
+    return `【${title}】${issue.description.trim()}`
+  })
+  return lines.join('\n')
+}
+
 function findPotentialSystemicGroups(groups: IssueGroup[]): CandidateIssueGroup[] {
   const byCategory = new Map<IssueCategory, IssueGroup[]>()
   groups.forEach((group) => {
@@ -387,11 +482,27 @@ export async function deduplicateIssues(
     })
   }
 
-  // 跨检查项比对完成后,剩余未被合并的issue再按skill_id分组。
-  // 若同一检查项内部仍有多个不同位置的issue(真实不同的发现,非重复),打包展示。
+  // ★ S2: cross_skill_same_location 位置归堆
+  // 对跨检查项去重后的剩余 issue，按位置相似度（Union-Find 传递闭包）聚类。
+  // 同一位置被多个不同检查项发现的独立分析 → 合成一张卡，各自保留 reason，不强行合并成一条。
   const remainingAfterCross = foundIssues.filter((issue) => !used.has(issue))
+  const locationClusters = findLocationClusters(remainingAfterCross)
+  locationClusters.forEach((cluster, clusterIndex) => {
+    cluster.forEach((issue) => used.add(issue))
+    groups.push(makeGroup({
+      id: `group-location-cluster-${clusterIndex + 1}`,
+      mergeType: 'cross_skill_same_location',
+      title: crossSkillGroupTitle(cluster),
+      issues: cluster,
+      description: crossSkillGroupDescription(cluster, skillMap),
+    }))
+  })
+
+  // 跨检查项比对完成后,剩余未被归堆的issue再按skill_id分组。
+  // 若同一检查项内部仍有多个不同位置的issue(真实不同的发现,非重复),打包展示。
+  const remainingAfterCluster = foundIssues.filter((issue) => !used.has(issue))
   const bySkill = new Map<string, Issue[]>()
-  remainingAfterCross.forEach((issue) => {
+  remainingAfterCluster.forEach((issue) => {
     const items = bySkill.get(issue.skill_id) ?? []
     items.push(issue)
     bySkill.set(issue.skill_id, items)

@@ -22,6 +22,7 @@ function mergeHint(issue: IssueGroup) {
   if (issue.merge_type === 'same_skill_multi_location') return '多处命中，展开可逐处查看'
   if (issue.merge_type === 'duplicate_content_merge') return '多项检查同时触发'
   if (issue.merge_type === 'systemic_synthesis') return '基于多处线索归纳'
+  if (issue.merge_type === 'cross_skill_same_location') return '同一位置多角度发现'
   return null
 }
 
