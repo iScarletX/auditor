@@ -1,3 +1,4 @@
+import { cosineSimilarity, getEmbeddings, SEMANTIC_DUPLICATE_THRESHOLD } from './embeddingClient'
 import type {
   CandidateIssueGroup,
   ConfidenceDisplay,
@@ -90,6 +91,36 @@ function locationSignature(issue: Issue) {
     issue.location.matched_text ?? '',
     issue.location.anchor_after,
   ].join('|')
+}
+
+// ============ S0: 稳定指纹机制(SARIF fingerprint 范式) ============
+// 目的:让"同一位置+同一类别"的发现无论描述用词差异多大都能被认出是同一问题,
+// 解决"同一雷被7个检查项各报一次却因描述不像而合并失败"。
+
+// 位置锚点归一化:取锚点与命中文本的紧凑形式,容忍空白/标点差异
+function locationAnchorKey(issue: Issue): string {
+  const before = normalizeText(issue.location.anchor_before ?? '').slice(-24)
+  const matched = normalizeText(issue.location.matched_text ?? '').slice(0, 40)
+  const after = normalizeText(issue.location.anchor_after ?? '').slice(0, 24)
+  // 命中文本是最强锚点;无命中文本时回退到前后锚点组合
+  return matched.length >= 4 ? `m:${matched}` : `c:${before}~${after}`
+}
+
+// 精确指纹:位置 + 类别 + 命中原文片段。用于"当次跑测内去重"
+export function preciseFingerprint(issue: Issue): string {
+  return `${issue.category}::${locationAnchorKey(issue)}`
+}
+
+// 模糊指纹:仅位置行范围 + 类别(不含具体片段)。用于"跨版本 baseline diff",容忍行号漂移与文字微调
+export function partialFingerprint(issue: Issue): string {
+  const line = issue.location.line_range ? issue.location.line_range[0] : ''
+  const before = normalizeText(issue.location.anchor_before ?? '').slice(-16)
+  return `${issue.category}::L${line}::${before}`
+}
+
+// 两条 issue 是否指向同一问题(指纹判定,优先于相似度)
+function sameFingerprint(a: Issue, b: Issue): boolean {
+  return preciseFingerprint(a) === preciseFingerprint(b)
 }
 
 function locationsDistinct(issues: Issue[]) {
@@ -212,7 +243,11 @@ function makeGroup(params: {
   }
 }
 
-function findDuplicatePair(issues: Issue[]) {
+// 第3级兼底用的相似度查询器:传入 issue 数组与对应 embedding,按引用返回两条 issue 的余弦相似度。
+// 算不到(无embedding/不在表中)时返回 null,调用方应降级为仅用jaccard。
+export type SemanticSimilarityLookup = (a: Issue, b: Issue) => number | null
+
+function findDuplicatePair(issues: Issue[], semanticLookup?: SemanticSimilarityLookup) {
   let bestPair: [Issue, Issue] | null = null
   let bestScore = 0
 
@@ -221,6 +256,24 @@ function findDuplicatePair(issues: Issue[]) {
       const left = issues[i]
       const right = issues[j]
       if (!left || !right || left.skill_id === right.skill_id) continue
+      // ★ S0 第1级:指纹优先——同一位置+同一类别直接判定为同一问题,
+      // 不论描述用词差异多大(解决"同雷多报"但描述不像导致合并失败)。
+      if (sameFingerprint(left, right)) {
+        return [left, right]
+      }
+      // ★ S0 第2级:embedding 语义相似度兼底。
+      // 修正记录(2026-07-08):最初设计要求"位置先重叠才embedding",但这与 embedding 存在的目的自相矛皾:
+      // embedding 正是要救"位置摘录完全不重叠(同一矛盞的两半边各摘一句)但实为同一问题"的情况，
+      // 加上位置重叠门槛反而把这种真实情况挡在外面(实测系统中证实一直未触发)。
+      // 现去除该门槛,直接依赖语义相似度阈值本身的区分力(实测:不相关项 0.20-0.28,同问题不同表述 0.70-0.93,
+      // 安全边界宽达0.4+,无需额外位置前提)。
+      if (semanticLookup) {
+        const semScore = semanticLookup(left, right)
+        if (semScore !== null && semScore >= SEMANTIC_DUPLICATE_THRESHOLD) {
+          return [left, right]
+        }
+      }
+      // 回退:位置重叠+描述相似度加权(原有机制,处理指纹不同但实为同一问题的情况)
       const locScore = locationOverlap(left, right)
       const descScore = jaccard(left.description, right.description)
       const score = locScore * 0.6 + descScore * 0.4
@@ -256,14 +309,89 @@ function findPotentialSystemicGroups(groups: IssueGroup[]): CandidateIssueGroup[
   return candidates
 }
 
-export function deduplicateIssues(issues: Issue[], skills: SkillDefinition[]): DeduplicationResult {
+/**
+ * S0 第2级兼底:为一组 issue 批量取 embedding，构建可供 findDuplicatePair 查询的相似度表。
+ * 无 apiKey 或请求失败时静默返回 null，调用方降级为仅精确指纹+jaccard，不中断主流程。
+ */
+// 优先取"原文引用片段"(matched_text)而非整段description。
+// 实测发现:整段描述混杂分析框架文字("歧义表达""内部矛皾"等)会稀释核心事实信号,
+// 导致同一雷的不同表述相似度只在 0.58-0.72;只取原文引用句时可升至 0.70-0.93。
+function embeddingTextFor(issue: Issue): string {
+  const anchorBefore = issue.location.anchor_before ?? ''
+  const matched = issue.location.matched_text ?? ''
+  const anchorAfter = issue.location.anchor_after ?? ''
+  const anchorText = `${anchorBefore} ${matched} ${anchorAfter}`.trim()
+  // 原文引用足够有信息量时优先用它;否则回退到description(仍比不去重好)
+  return anchorText.length >= 8 ? anchorText : issue.description
+}
+
+async function buildSemanticLookup(
+  issues: Issue[],
+  apiKey: string | null,
+): Promise<SemanticSimilarityLookup | undefined> {
+  if (!apiKey || issues.length < 2) return undefined
+  const texts = issues.map((issue) => embeddingTextFor(issue))
+  const vectors = await getEmbeddings(texts, { apiKey })
+  if (!vectors) return undefined // 静默降级:网络失败/无key时不阻塞主流程
+
+  const indexOf = new Map(issues.map((issue, i) => [issue, i]))
+  return (a, b) => {
+    const ia = indexOf.get(a)
+    const ib = indexOf.get(b)
+    if (ia === undefined || ib === undefined) return null
+    const va = vectors[ia]
+    const vb = vectors[ib]
+    if (!va || !vb) return null
+    return cosineSimilarity(va, vb)
+  }
+}
+
+export async function deduplicateIssues(
+  issues: Issue[],
+  skills: SkillDefinition[],
+  options?: { embeddingApiKey?: string | null },
+): Promise<DeduplicationResult> {
   const skillMap = new Map(skills.map((skill) => [skill.id, skill]))
   const foundIssues = issues.filter((issue) => issue.status === 'found')
   const groups: IssueGroup[] = []
   const used = new Set<Issue>()
+  const semanticLookup = await buildSemanticLookup(foundIssues, options?.embeddingApiKey ?? null)
 
+  // ★ 修正记录(2026-07-08):原来先按skill_id分组打包(same_skill_multi_location)、后才跨检查项比对。
+  // 真实运行中发现:若同一检查项自己内部已报了多个不同位置的issue,会被早早打包并标记used,
+  // 导致它实际与其他检查项的issue语义相似度高达0.78+也无法再参与比对(早已被锁死)。
+  // 现改为先跨检查项比对(指纹/embedding/jaccard三级),再处理同检查项内部剩余的位置分组。
+  // 安全性:findDuplicatePair 内部已显式跳过 left.skill_id === right.skill_id 的对,因此跨检查项比对
+  // 不会干扰后面"同检查项内部多位置"的打包逻辑。
+  const crossSkillRemaining = [...foundIssues]
+  while (crossSkillRemaining.length > 0) {
+    const pair = findDuplicatePair(crossSkillRemaining, semanticLookup)
+    if (!pair) break
+    pair.forEach((issue) => used.add(issue))
+    pair.forEach((issue) => {
+      const index = crossSkillRemaining.indexOf(issue)
+      if (index >= 0) crossSkillRemaining.splice(index, 1)
+    })
+    const chosen = [...pair].sort((a, b) => b.description.length - a.description.length)[0]
+    groups.push({
+      ...makeGroup({
+      id: `group-duplicate-${groups.length + 1}`,
+      mergeType: 'duplicate_content_merge',
+      title: chosen.description,
+      issues: [chosen],
+      description: `${chosen.description} 同时触发：${pair.map((issue) => skillTitle(skillMap, issue.skill_id)).join('、')}。`,
+      }),
+      related_skill_ids: [...new Set(pair.map((issue) => issue.skill_id))],
+      raw_model_output_ids: rawModelOutputIdsFromIssues(pair),
+      ...profileConflictFromIssues(pair),
+    })
+  }
+
+  // 跨检查项比对完成后,剩余未被合并的issue再按skill_id分组。
+  // 若同一检查项内部仍有多个不同位置的issue(真实不同的发现,非重复),打包展示。
+  const remainingAfterCross = foundIssues.filter((issue) => !used.has(issue))
   const bySkill = new Map<string, Issue[]>()
-  foundIssues.forEach((issue) => {
+  remainingAfterCross.forEach((issue) => {
     const items = bySkill.get(issue.skill_id) ?? []
     items.push(issue)
     bySkill.set(issue.skill_id, items)
@@ -282,30 +410,7 @@ export function deduplicateIssues(issues: Issue[], skills: SkillDefinition[]): D
     }
   })
 
-  const remaining = foundIssues.filter((issue) => !used.has(issue))
-  while (remaining.length > 0) {
-    const pair = findDuplicatePair(remaining)
-    if (!pair) break
-    pair.forEach((issue) => used.add(issue))
-    pair.forEach((issue) => {
-      const index = remaining.indexOf(issue)
-      if (index >= 0) remaining.splice(index, 1)
-    })
-    const chosen = [...pair].sort((a, b) => b.description.length - a.description.length)[0]
-    groups.push({
-      ...makeGroup({
-      id: `group-duplicate-${groups.length + 1}`,
-      mergeType: 'duplicate_content_merge',
-      title: chosen.description,
-      issues: [chosen],
-      description: `${chosen.description} 同时触发：${pair.map((issue) => skillTitle(skillMap, issue.skill_id)).join('、')}。`,
-      }),
-      related_skill_ids: [...new Set(pair.map((issue) => issue.skill_id))],
-      raw_model_output_ids: rawModelOutputIdsFromIssues(pair),
-      ...profileConflictFromIssues(pair),
-    })
-  }
-
+  // 注:跨检查项比对已在上方 crossSkillRemaining 循环中一次性完成,此处不再重复。
   foundIssues
     .filter((issue) => !used.has(issue))
     .forEach((issue) => {
@@ -376,11 +481,12 @@ function synthesizeGroup(params: {
   })
 }
 
-export function mergeConsolidationIntoGroups(params: {
+export async function mergeConsolidationIntoGroups(params: {
   groups: IssueGroup[]
   consolidation: ReviewConsolidationResult
   skills: SkillDefinition[]
-}): IssueGroup[] {
+  embeddingApiKey?: string | null
+}): Promise<IssueGroup[]> {
   let finalGroups = [...params.groups]
 
   params.consolidation.synthesis_results.forEach((result) => {
@@ -398,9 +504,12 @@ export function mergeConsolidationIntoGroups(params: {
   })
 
   if (params.consolidation.new_issues.length > 0) {
+    const newDedup = await deduplicateIssues(params.consolidation.new_issues, params.skills, {
+      embeddingApiKey: params.embeddingApiKey,
+    })
     finalGroups = [
       ...finalGroups,
-      ...deduplicateIssues(params.consolidation.new_issues, params.skills).groups,
+      ...newDedup.groups,
     ]
   }
 

@@ -331,7 +331,7 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
     errors: [...allErrors],
   })
 
-  const deduplicated = deduplicateIssues(rawIssues, plannedSkills)
+  const deduplicated = await deduplicateIssues(rawIssues, plannedSkills, { embeddingApiKey: params.apiKey })
   completed += 1
   params.onProgress?.({
     phase: 'dedupe',
@@ -366,10 +366,11 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
     errors: [...allErrors],
   })
 
-  const finalIssues = mergeConsolidationIntoGroups({
+  const finalIssues = await mergeConsolidationIntoGroups({
     groups: deduplicated.groups,
     consolidation,
     skills: plannedSkills,
+    embeddingApiKey: params.apiKey,
   })
   const prescription = consolidation.prescription
 

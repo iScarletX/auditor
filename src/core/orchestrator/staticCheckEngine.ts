@@ -503,6 +503,124 @@ function runIo3(skill: SkillDefinition, targetSp: string): Issue[] {
   return issues
 }
 
+// ============ S1: L1 静态层扩容(锚定 AgentLinter 规则库) ============
+// 这一类检测的定义:"无需理解语义,只看形状就能确定判对错"。
+// 不调用LLM,零噪音,可复现。对齐 01-AgentLinter规则库 security/skill-safety 两类。
+
+interface PatternRule {
+  name: string
+  pattern: RegExp
+  severity: IssueSeverity
+}
+
+// 对齐 AgentLinter security/secret-scan —— 明文密钥/token 正则库
+const SECRET_PATTERNS: PatternRule[] = [
+  { name: 'OpenAI API Key', pattern: /\bsk-[a-zA-Z0-9]{20,}\b/, severity: 'critical' },
+  { name: 'Anthropic API Key', pattern: /\bsk-ant-[a-zA-Z0-9-]{20,}\b/, severity: 'critical' },
+  { name: 'Bearer Token', pattern: /Bearer\s+[a-zA-Z0-9._-]{20,}/, severity: 'critical' },
+  { name: 'GitHub Token', pattern: /\bgh[ps]_[a-zA-Z0-9]{36}\b/, severity: 'critical' },
+  { name: 'AWS Access Key', pattern: /\bAKIA[A-Z0-9]{16}\b/, severity: 'critical' },
+  { name: 'Slack Token', pattern: /\bxox[bpas]-[a-zA-Z0-9-]{10,}\b/, severity: 'critical' },
+  { name: 'Stripe Key', pattern: /\bsk_(?:test|live)_[a-zA-Z0-9]{24,}\b/, severity: 'critical' },
+]
+
+// 对齐 AgentLinter skill-safety/dangerous-commands —— 危险命令正则库
+const DANGEROUS_COMMAND_PATTERNS: PatternRule[] = [
+  { name: '递归删除根目录/主目录', pattern: /rm\s+-rf\s+[/~]/, severity: 'critical' },
+  { name: '把 curl 结果直接管道到 shell 执行', pattern: /curl\s+.*\|\s*(?:bash|sh|zsh)/, severity: 'critical' },
+  { name: '把 wget 结果直接管道到 shell 执行', pattern: /wget\s+.*-O\s*-\s*\|\s*(?:bash|sh)/, severity: 'critical' },
+  { name: '动态 eval 执行', pattern: /\beval\s*\(/, severity: 'major' },
+  { name: '开放全权限(chmod 777)', pattern: /chmod\s+777/, severity: 'major' },
+]
+
+// 对齐 AgentLinter skill-safety/sensitive-paths —— 敏感路径正则库
+const SENSITIVE_PATH_PATTERNS: PatternRule[] = [
+  { name: 'SSH 密钥目录', pattern: /~\/\.ssh/, severity: 'major' },
+  { name: 'GPG 密钥目录', pattern: /~\/\.gnupg/, severity: 'major' },
+  { name: 'AWS 凭据文件', pattern: /~\/\.aws\/credentials/, severity: 'major' },
+  { name: '本地环境变量文件', pattern: /~\/\.env\b/, severity: 'minor' },
+  { name: '系统密码文件', pattern: /\/etc\/passwd/, severity: 'major' },
+  { name: '系统 shadow 文件', pattern: /\/etc\/shadow/, severity: 'major' },
+]
+
+function maskSecret(matched: string): string {
+  if (matched.length <= 8) return '[REDACTED]'
+  return `${matched.slice(0, 6)}...[REDACTED]`
+}
+
+/** 密钥/敏感信息扫描。对齐 AgentLinter security 类。无需调用任何模型，正则直命。 */
+function runSecretScan(skill: SkillDefinition, targetSp: string): Issue[] {
+  const issues: Issue[] = []
+  SECRET_PATTERNS.forEach((rule, ruleIndex) => {
+    const match = targetSp.match(rule.pattern)
+    if (!match) return
+    issues.push(
+      makeIssueAtText({
+        id: `${skill.id}-secret-${ruleIndex + 1}`,
+        skill,
+        severity: rule.severity,
+        evidence_type: 'explicit_conflict',
+        probe: match[0],
+        targetSp,
+        description: `检测到明文密钥/凭据泄露：${rule.name} —— ${maskSecret(match[0])}。密钥不应出现在提示词/技能文档中，会造成凭据泄露风险。`,
+        fix: safeFix({
+          action: 'text_delete',
+          target: rule.name,
+          content: '立即删除该密钥并轮换/失效该凭据；改用环境变量或运行时注入的方式引用密钥，文档中只保留占位符（如 $API_KEY）。',
+        }),
+      }),
+    )
+  })
+  return issues
+}
+
+/** 危险命令/敏感路径扫描(skill-safety)。对齐 AgentLinter skill-safety 类。无需调用任何模型。 */
+function runSkillSafetyScan(skill: SkillDefinition, targetSp: string): Issue[] {
+  const issues: Issue[] = []
+  DANGEROUS_COMMAND_PATTERNS.forEach((rule, ruleIndex) => {
+    const match = targetSp.match(rule.pattern)
+    if (!match) return
+    issues.push(
+      makeIssueAtText({
+        id: `${skill.id}-cmd-${ruleIndex + 1}`,
+        skill,
+        severity: rule.severity,
+        evidence_type: 'explicit_conflict',
+        probe: match[0],
+        targetSp,
+        description: `检测到危险命令模式：${rule.name} —— 原文片段 "${match[0]}"。该命令若被执行环境实际运行，可能造成数据损毁或系统被控。`,
+        fix: safeFix({
+          action: 'text_replace',
+          target: rule.name,
+          from: match[0],
+          to: '改为限定范围、可审计的命令；避免管道直接执行远程脚本、避免递归删除根/主目录、避免开放全部权限。',
+        }),
+      }),
+    )
+  })
+  SENSITIVE_PATH_PATTERNS.forEach((rule, ruleIndex) => {
+    const match = targetSp.match(rule.pattern)
+    if (!match) return
+    issues.push(
+      makeIssueAtText({
+        id: `${skill.id}-path-${ruleIndex + 1}`,
+        skill,
+        severity: rule.severity,
+        evidence_type: 'explicit_conflict',
+        probe: match[0],
+        targetSp,
+        description: `检测到访问敏感系统路径：${rule.name} —— 原文片段 "${match[0]}"。技能/提示词若声明访问此类路径，存在凭据泄露或越权风险，需要明确的权限边界说明。`,
+        fix: safeFix({
+          action: 'text_insert',
+          target: rule.name,
+          content: '补充明确的权限边界说明：为何需要访问该路径、访问范围、是否有用户确认环节；如非必要应移除该访问。',
+        }),
+      }),
+    )
+  })
+  return issues
+}
+
 function runSymbolConflict(skill: SkillDefinition, targetSp: string): Issue[] {
   const issues: Issue[] = []
   const roleTags = targetSp.match(/\b(System|User|Assistant|Developer)\s*:/gi) ?? []
@@ -559,6 +677,8 @@ export function runStaticCheckEngine(skill: SkillDefinition, targetSp: string): 
   if (skill.id === '01_clarity_missing_constraint' || skill.id === 'I5_missing_constraint') issues = runI5(skill, targetSp)
   if (skill.id === '02_contract_output_precision' || skill.id === 'IO3_output_schema_precision') issues = runIo3(skill, targetSp)
   if (skill.id === '04_interop_symbol_conflict') issues = runSymbolConflict(skill, targetSp)
+  if (skill.id === '05_robustness_secret_leak') issues = runSecretScan(skill, targetSp)
+  if (skill.id === '05_robustness_skill_dangerous_pattern') issues = runSkillSafetyScan(skill, targetSp)
 
   return {
     skill_id: skill.id,

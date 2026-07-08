@@ -175,6 +175,17 @@ const builtinSeeds: BuiltinSkillSeed[] = [
     fix: '补充来源字段、引用格式和来源缺失时的处理规则。',
   },
   {
+    id: '02_contract_dangling_reference',
+    category: 'contract',
+    title: '悬空引用与缺失定义',
+    severity: 'critical',
+    description:
+      '检查文档内部的交叉引用是否落空：某处引用/依赖了另一处的规则、字段、步骤、章节号、自检项、配置键或枚举值，但被引用的目标在文档中找不到对应定义。这是发现“规则被删除后留下引用悬空”这类缺失型缺陷的核心手段。',
+    check:
+      '通读全文并在内部建立“被引用目标 → 定义来源”的映射，逐条核对：(1) 自检清单/检查步骤里点名的规则或术语（如“单层表情直接判死”“身份门槛判死”），在正文是否真的存在对应定义段落；(2) 步骤/章节互相引用的编号（如“见 §2.3”“退回第3步”“依据 retry 规则表”）所指目标是否存在；(3) 输出契约或字段说明引用的字段/枚举值，在结构定义中是否出现；(4) 配置或状态机引用的键、模型名、动作是否在对应配置处定义；(5) 一处声明“由某规则/门槛拦截”，那条规则/门槛是否真的写了出来。任一被引用目标在文档中缺失对应定义 → 判 found，并同时指出“引用方位置”和“缺失的被引用目标”。注意：这是缺失检测，不能因为“文档读起来通顺”就判 pass；被删除的规则通常不留文本痕迹，只能靠引用悬空反推。',
+    fix: '补回缺失的被引用定义，或删除/修正悬空的引用方，使交叉引用两端一致。',
+  },
+  {
     id: '02_contract_section_structure',
     category: 'contract',
     title: '章节结构',
@@ -400,6 +411,27 @@ const builtinSeeds: BuiltinSkillSeed[] = [
     description: '检查引用、改写、长文本复用是否有来源和版权提醒。',
     check: '判断 prompt 是否要求尊重来源、避免长篇复刻和标注引用。',
     fix: '补充来源标注、摘要优先和禁止大段复制的规则。',
+  },
+  // ===== S1: L1静态层扩容（锚定 AgentLinter security/skill-safety）=====
+  {
+    id: '05_robustness_secret_leak',
+    category: 'robustness',
+    title: '密钥泄露',
+    severity: 'critical',
+    executionMode: 'hybrid',
+    description: '检查文档中是否明文包含 API 密钥、token、凭据等敏感信息。',
+    check: '正则扫描 sk-/Bearer/ghp_/AKIA 等常见密钥格式；若无命中则再由模型补充判断其他型态的敏感信息泄露。',
+    fix: '删除密钥并轮换凭据，改用环境变量或运行时注入引用。',
+  },
+  {
+    id: '05_robustness_skill_dangerous_pattern',
+    category: 'robustness',
+    title: '危险命令与敏感路径',
+    severity: 'major',
+    executionMode: 'hybrid',
+    description: '检查 Skill/脚本类内容是否包含危险命令或访问敏感系统路径。',
+    check: '正则扫描 rm -rf、curl|bash、chmod 777 等危险命令模式，以及 ~/.ssh、/etc/passwd 等敏感路径引用；若无命中则再由模型补充判断其他型态风险。',
+    fix: '改为限定范围、可审计的命令，或补充明确的权限边界说明。',
   },
 ]
 
