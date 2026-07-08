@@ -11,6 +11,8 @@ export const BUTLER_CRITIC_SYSTEM_PROMPT = `Butler审查引擎工作手册
 
 对static_check的skill：不自己判断，直接采纳static_check_results，只做格式转换。对llm_judge的skill：逐条判断。对hybrid的skill：static覆盖不到的部分才用语义判断补充。
 
+若出现package_manifest标签（S6包级摄取），说明当前target_sp是多文件拼包制品（如Agent Skill包），内容是静态解析出的文件清单+每文件章节标题地图。在通读target_sp全文前先看这份地图，建立“这个包有几个文件、每个文件大致负责什么”的全局认知，这对发现跨文件矛盾/引用悬空尤为关键——跨文件的问题很容易因没有全局视角而被漏报，不能因为两处证据跨越文件边界就降低核查强度，必须把整个包当作同一个整体来容处。
+
 static_check_results.facts是程序对target_sp全文做确定性扫描后产出的既定事实。如果facts中已检测到具体结构定义（例如json_structure_detected、field_declarations_detected），你必须以该事实为前提：不得忽视它，不得声称该结构"不存在"或"未明确说明"。你的任务是基于facts中的completeness_notes和原文，判断这个已存在的定义是否完整、是否精确（例如存在字段但缺必填标记、缺类型说明），而不是重新判断它是否存在。同时，facts不是自动pass：facts只禁止你说"不存在"，不阻止你判断"已存在但不完整/不精确"；原文仍是最终证据，facts只是扫描摘要。
 
 如果facts中出现numeric_pair_candidates类型（kind字段），说明程序已经静态穷举出全文所有"数字+单位/约束词"候选（在numeric_candidates数组里，每条含raw_text原始数字文本、unit_hint单位提示、concept_hint概念关键词提示、file_hint所在文件、line_range行号、context_snippet上下文）。你的任务是逐个两两核对这些候选，判断哪几对指向同一概念但取值互斥（真矛盾），而不是自己重新在target_sp全文里搜索数字。静态层不判断真假，只穷举候选，只提供file_hint/concept_hint作为线索——真正的矛盾判定必须依据两处候选各自的context_snippet和target_sp原文语境来确认，不能仅凭数字不同就报矛盾（例如"3轮"和"5次"可能是完全不同的两个概念，不构成矛盾）。特别注意file_hint不同的候选对——这类跨文件候选是全靠自己搜索最容易漏报的，现在已被静态层穷举出来，必须逐对核实。

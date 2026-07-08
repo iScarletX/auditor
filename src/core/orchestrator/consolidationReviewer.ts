@@ -22,6 +22,7 @@ import { retryWithErrorFeedback, type RetryRawResponse } from '../responseRepair
 import { formatDocumentProfileForPrompt } from './documentProfiler'
 import { issueGroupLooksSimilar } from './issueSimilarity'
 import { normalizeStrictIssue, type RawIssueCandidate } from './issueValidation'
+import { buildPackageManifest } from './packageManifest'
 
 function emptyPrescription(overallAssessment = '复核完毕，未生成额外综合处方。'): ReviewPrescription {
   return {
@@ -244,7 +245,9 @@ function normalizeB2(
 
 export function buildConsolidationB1Prompt(targetSp: string, documentProfile?: DocumentProfile) {
   const profileBlock = documentProfile ? `${formatDocumentProfileForPrompt(documentProfile)}\n\n` : ''
-  return `${profileBlock}<target_sp>
+  const manifest = buildPackageManifest(targetSp)
+  const manifestBlock = manifest ? `<package_manifest>\n${manifest}\n</package_manifest>\n\n` : ''
+  return `${profileBlock}${manifestBlock}<target_sp>
 ${targetSp}
 </target_sp>`
 }
@@ -256,9 +259,11 @@ function buildB2Prompt(params: {
   issueGroups: IssueGroup[]
   candidateGroups: CandidateIssueGroup[]
 }) {
+  const manifest = buildPackageManifest(params.targetSp)
+  const manifestBlock = manifest ? `<package_manifest>\n${manifest}\n</package_manifest>\n\n` : ''
   return `${formatDocumentProfileForPrompt(params.documentProfile)}
 
-<target_sp>
+${manifestBlock}<target_sp>
 ${params.targetSp}
 </target_sp>
 

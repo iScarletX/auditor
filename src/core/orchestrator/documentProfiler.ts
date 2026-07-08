@@ -7,6 +7,7 @@ import type {
   RawModelOutput,
 } from '../../types/reviewReport.types'
 import { getProviderAdapter } from '../modelProvider/providerAdapter'
+import { buildPackageManifest } from './packageManifest'
 import { parseJsonObject } from '../responseRepair/autoRepairJson'
 import {
   retryWithErrorFeedback,
@@ -19,7 +20,8 @@ const validateDocumentProfile = ajv.compile<DocumentProfile>(documentProfileSche
 export const DOCUMENT_PROFILE_SCHEMA_NAME = 'DocumentProfile'
 
 export function buildDocumentProfilePrompt(targetSp: string) {
-  return `<target_sp>
+  const manifest = buildPackageManifest(targetSp)
+  return `${manifest ? `<package_manifest>\n${manifest}\n</package_manifest>\n\n` : ''}<target_sp>
 ${targetSp}
 </target_sp>`
 }

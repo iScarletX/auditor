@@ -7,6 +7,7 @@ import type {
   ReviewPrescription,
 } from '../../types/reviewReport.types'
 import { getProviderAdapter } from '../modelProvider/providerAdapter'
+import { buildPackageManifest } from './packageManifest'
 import { parseJsonObject } from '../responseRepair/autoRepairJson'
 import { retryWithErrorFeedback, type RetryRawResponse } from '../responseRepair/retryWithErrorFeedback'
 
@@ -166,11 +167,13 @@ function buildUserPrompt(params: {
     conflicts_resolved: action.conflicts_resolved || null,
     confidence: params.confidenceByPriority.get(action.priority) ?? '中',
   }))
+  const manifest = buildPackageManifest(params.targetSp)
+  const manifestBlock = manifest ? `<package_manifest>\n${manifest}\n</package_manifest>\n\n` : ''
   return `<document_profile>
 ${JSON.stringify(params.documentProfile, null, 2)}
 </document_profile>
 
-<confirmed_problems>
+${manifestBlock}<confirmed_problems>
 ${JSON.stringify(actionsPayload, null, 2)}
 </confirmed_problems>
 

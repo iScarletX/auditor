@@ -15,6 +15,7 @@ import {
 } from '../responseRepair/retryWithErrorFeedback'
 import { formatDocumentProfileForPrompt } from './documentProfiler'
 import { normalizeStrictIssue, type RawIssueCandidate } from './issueValidation'
+import { buildPackageManifest } from './packageManifest'
 import type { StaticCheckResult } from './staticCheckEngine'
 
 interface UnknownReport {
@@ -81,13 +82,14 @@ function buildUserPrompt(
   targetSp: string,
   scenarioHint: string,
 ) {
+  const manifest = buildPackageManifest(targetSp)
   return `<loaded_skills>
 ${skill.fullContent}
 </loaded_skills>
 
 ${formatDocumentProfileForPrompt(documentProfile)}
 
-<static_check_results>
+${manifest ? `<package_manifest>\n${manifest}\n</package_manifest>\n\n` : ''}<static_check_results>
 ${JSON.stringify(staticResult ?? { skill_id: skill.id, issues: [] }, null, 2)}
 </static_check_results>
 
