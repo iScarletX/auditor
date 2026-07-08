@@ -225,6 +225,36 @@ interface EditRuntime {
   effectiveAfter: string
 }
 
+// ===== 大问题列表行（必改区/次要区复用） =====
+
+function ProblemRow({ problem, onClick }: { problem: BigProblem; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition hover:bg-slate-50"
+      onClick={onClick}
+    >
+      <span className={cn('h-3 w-3 shrink-0 rounded-full', severityDot[problem.severity])} />
+      <span className="min-w-0 flex-1">
+        <span className="text-sm font-medium text-slate-950">{problem.title}</span>
+        <span className="ml-2 inline-flex flex-wrap items-center gap-1.5 align-middle">
+          {problem.nature ? (
+            <Badge className={NATURE_BADGE[problem.nature]}>{NATURE_LABELS[problem.nature]}</Badge>
+          ) : null}
+          <span className="text-xs text-slate-500">
+            {problem.isGlobal
+              ? '整体问题'
+              : problem.positionRelation === 'joint'
+                ? `${problem.positions.length} 处联合`
+                : `${problem.positions.length} 处位置`}
+          </span>
+        </span>
+      </span>
+      <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+    </button>
+  )
+}
+
 // ===== 详情弹窗 =====
 
 function ProblemDetail({
@@ -605,6 +635,7 @@ export function ReportView({
   const [showFullDoc, setShowFullDoc] = useState(false)
   const [showScoreDetail, setShowScoreDetail] = useState(false)
   const [showMinorNotes, setShowMinorNotes] = useState(false)
+  const [showSecondaryProblems, setShowSecondaryProblems] = useState(false)
   const [expandedDocLine, setExpandedDocLine] = useState<number | null>(null)
 
   // 修复应用状态：workingSp 是应用修改后的工作副本
@@ -706,6 +737,23 @@ export function ReportView({
   const ranCheckCount = checkPlan.filter((entry) => entry.decision === 'run').length || report.meta.skills_run.length
   const detailProblem = problems.find((problem) => problem.key === detailKey) ?? null
   const minorNotes = report.prescription.minor_notes
+
+  // ⑦ 倒金字塔·必修上限铁律：严重/中等进「必改区」（上限 7 条，SP 类），
+  // 轻微 + 超出上限的中等问题进「次要区」折叠，让用户先聚焦非改不可的那几条。
+  const MUST_FIX_LIMIT = 7
+  const { mustFixProblems, secondaryProblems } = useMemo(() => {
+    const mustFix: BigProblem[] = []
+    const secondary: BigProblem[] = []
+    for (const problem of problems) {
+      const isCritical = problem.severity === '严重' || problem.severity === '中等'
+      if (isCritical && mustFix.length < MUST_FIX_LIMIT) {
+        mustFix.push(problem)
+      } else {
+        secondary.push(problem)
+      }
+    }
+    return { mustFixProblems: mustFix, secondaryProblems: secondary }
+  }, [problems])
 
   // 完整原文区：全部大问题位置合并
   const docPositions = useMemo(() => {
@@ -828,44 +876,55 @@ export function ReportView({
         </div>
       </section>
 
-      {/* 结论 + 大问题列表 */}
+      {/* 结论 + 大问题列表（⑦ 倒金字塔：必改区在前、次要区折叠） */}
       <section className="rounded-lg border border-slate-200 bg-white p-5">
         <p className="text-sm leading-6 text-slate-700">{report.prescription.overall_assessment}</p>
 
-        <div className="mt-4 space-y-1">
-          {problems.length === 0 ? (
-            <p className="rounded-md border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-slate-500">
-              没有需要处理的问题
-            </p>
-          ) : (
-            problems.map((problem) => (
-              <button
-                key={problem.key}
-                type="button"
-                className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition hover:bg-slate-50"
-                onClick={() => setDetailKey(problem.key)}
-              >
-                <span className={cn('h-3 w-3 shrink-0 rounded-full', severityDot[problem.severity])} />
-                <span className="min-w-0 flex-1">
-                  <span className="text-sm font-medium text-slate-950">{problem.title}</span>
-                  <span className="ml-2 inline-flex flex-wrap items-center gap-1.5 align-middle">
-                    {problem.nature ? (
-                      <Badge className={NATURE_BADGE[problem.nature]}>{NATURE_LABELS[problem.nature]}</Badge>
-                    ) : null}
-                    <span className="text-xs text-slate-500">
-                      {problem.isGlobal
-                        ? '整体问题'
-                        : problem.positionRelation === 'joint'
-                          ? `${problem.positions.length} 处联合`
-                          : `${problem.positions.length} 处位置`}
-                    </span>
+        {problems.length === 0 ? (
+          <p className="mt-4 rounded-md border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-slate-500">
+            没有需要处理的问题
+          </p>
+        ) : (
+          <>
+            {/* 必改区：非改不可的前 N 条 */}
+            {mustFixProblems.length > 0 ? (
+              <div className="mt-4">
+                <div className="mb-2 flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2.5 py-0.5 text-xs font-semibold text-red-700">
+                    • 建议优先处理 {mustFixProblems.length} 处
                   </span>
-                </span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-            ))
-          )}
-        </div>
+                  <span className="text-xs text-slate-400">按严重程度排序，先看这几条</span>
+                </div>
+                <div className="space-y-1">
+                  {mustFixProblems.map((problem) => (
+                    <ProblemRow key={problem.key} problem={problem} onClick={() => setDetailKey(problem.key)} />
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {/* 次要区：轻微 + 超出上限的问题，默认折叠 */}
+            {secondaryProblems.length > 0 ? (
+              <div className={cn('border-t border-slate-100', mustFixProblems.length > 0 ? 'mt-3 pt-3' : 'mt-4')}>
+                <button
+                  type="button"
+                  className="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-800"
+                  onClick={() => setShowSecondaryProblems((value) => !value)}
+                >
+                  其他 {secondaryProblems.length} 处次要问题（可选改）
+                  {showSecondaryProblems ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                </button>
+                {showSecondaryProblems ? (
+                  <div className="mt-2 space-y-1">
+                    {secondaryProblems.map((problem) => (
+                      <ProblemRow key={problem.key} problem={problem} onClick={() => setDetailKey(problem.key)} />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </>
+        )}
 
         {minorNotes.length > 0 ? (
           <div className="mt-3 border-t border-slate-100 pt-3">
