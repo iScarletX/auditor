@@ -1,4 +1,5 @@
 import type {
+  ConfidenceDisplay,
   DocumentProfile,
   ModelConfig,
   PrescriptionPriorityAction,
@@ -39,19 +40,23 @@ export interface FixPlan {
   edits: FixEdit[]
   /** edits 为空时必填：为什么无法给出文字级修复 */
   no_fix_reason?: string
+  /** S4-⑥守门员：该修法关联的所有issue都是“仅供参考”（未经多模型交叉确认）时标记，提醒用户重点复核 */
+  confidence_caveat?: true
 }
 
-const FIX_PLAN_SYSTEM_PROMPT = `Butler修复方案生成阶段
+const FIX_PLAN_SYSTEM_PROMPT = `Butler修复方案生成阶段（S4-⑥ 守门员）
 
-你会收到target_sp全文、document_profile、和一组已确认的大问题（每个含说明与关联原文位置）。你的任务是为每个大问题生成可直接应用的文字级修复方案。
+你会收到target_sp全文、document_profile、和一组已确认的大问题（每个含说明、关联原文位置、证据强度confidence、已裁决矛盾简述conflicts_resolved）。你的任务是为每个大问题生成可直接应用的文字级修复方案。
 
 硬规则：
 1. 每个edit的before_text必须逐字摘自target_sp原文，一字不差，包括标点和空格。系统会校验，对不上会被丢弃。
-2. after_text是替换后的完整文本，保持原文的语言风格和格式习惯（document_profile中的internal_conventions）。
+2. after_text是替换后的完整文本，保持原文的语言风格和格式习惯（document_profile中的internal_conventions），且after_text必须与before_text实质不同（严禁原文原样搬一遍当修改）。
 3. 修改必须克制：只改必须改的，不顺手润色无关内容，不改变作者的业务意图。
 4. position_relation为joint的问题：多处必须作为一组给出（apply_mode=group），并在group_note说明为什么必须一起改；independent的问题每处单独一个edit（apply_mode=independent）。
 5. 如果某个问题无法靠修改提示词文字解决（例如需要业务决策、需要外部配置），edits留空并在no_fix_reason如实说明，禁止硬凑一个没有意义的修改。
 6. note必须说清楚这样改解决了什么，一两句话。
+7. 矛盾裁决（守门员核心规则）：若同一大问题关联的多个issue对“应该改成什么”有矛盾，采信confidence更高的那一方（“高”>“中”>“仅供参考”），并在note里一句话说明采信理由；conflicts_resolved字段已说明上游复核阶段如何裁决，不要与其矛盾。
+8. 若大问题全部关联issue的confidence都是“仅供参考”（未经交叉确认），修改要更保守：宁可少改或留空说明原因，不要为了减完整度硬凑修法。
 
 只输出JSON：
 {
@@ -61,7 +66,7 @@ const FIX_PLAN_SYSTEM_PROMPT = `Butler修复方案生成阶段
       "apply_mode": "independent|group",
       "group_note": "仅apply_mode=group时填写",
       "edits": [
-        { "before_text": "逐字原文", "after_text": "替换文本", "note": "为什么这样改" }
+        { "before_text": "逐字原文", "after_text": "替换文本", "note": "为什么这样改（若涉及矛盾裁决请说明采信理由）" }
       ],
       "no_fix_reason": "仅edits为空时填写"
     }
@@ -85,7 +90,17 @@ interface UnknownFixPlanResult {
   fix_plans?: unknown
 }
 
-function normalizeFixPlans(raw: unknown, targetSp: string, validPriorities: Set<number>): FixPlan[] {
+/** 质量门槛：before_text 与 after_text 实质上一样（忽略前后空白差异）就算“改了等于没改”，模型空转硬凑一个无意义的edit时丢弃 */
+function isNoOpEdit(beforeText: string, afterText: string): boolean {
+  return normalizeCompact(beforeText) === normalizeCompact(afterText)
+}
+
+function normalizeFixPlans(
+  raw: unknown,
+  targetSp: string,
+  validPriorities: Set<number>,
+  confidenceCaveatPriorities: Set<number>,
+): FixPlan[] {
   if (!Array.isArray(raw)) return []
   const plans: FixPlan[] = []
   for (const item of raw) {
@@ -102,8 +117,9 @@ function normalizeFixPlans(raw: unknown, targetSp: string, validPriorities: Set<
       const beforeText = typeof edit.before_text === 'string' ? edit.before_text : ''
       const afterText = typeof edit.after_text === 'string' ? edit.after_text : ''
       const note = typeof edit.note === 'string' ? edit.note : ''
-      // 硬校验：before_text 必须能定位到原文
+      // 硬校验：before_text 必须能定位到原文；S4-⑥质量门槛：丢弃“改了等于没改”的无意义edit
       if (!beforeText || !afterText || !editLocatable(targetSp, beforeText)) continue
+      if (isNoOpEdit(beforeText, afterText)) continue
       edits.push({ before_text: beforeText, after_text: afterText, note })
     }
     const noFixReason = typeof candidate.no_fix_reason === 'string' && candidate.no_fix_reason.trim()
@@ -120,9 +136,17 @@ function normalizeFixPlans(raw: unknown, targetSp: string, validPriorities: Set<
         : {}),
       edits,
       ...(edits.length === 0 ? { no_fix_reason: noFixReason } : {}),
+      ...(confidenceCaveatPriorities.has(priority) ? { confidence_caveat: true as const } : {}),
     })
   }
   return plans
+}
+
+/** 一个大问题关联issue中“最强”的证据强度（高>中>仅供参考），给守门员做矛盾裁决的依据 */
+export function strongestConfidenceOf(confidences: ConfidenceDisplay[]): ConfidenceDisplay {
+  if (confidences.includes('高')) return '高'
+  if (confidences.includes('中')) return '中'
+  return '仅供参考'
 }
 
 function buildUserPrompt(params: {
@@ -130,6 +154,7 @@ function buildUserPrompt(params: {
   documentProfile: DocumentProfile
   actions: PrescriptionPriorityAction[]
   prescription: ReviewPrescription
+  confidenceByPriority: Map<number, ConfidenceDisplay>
 }) {
   const actionsPayload = params.actions.map((action) => ({
     priority: action.priority,
@@ -138,6 +163,8 @@ function buildUserPrompt(params: {
     nature: action.nature ?? null,
     position_relation: action.position_relation ?? null,
     grouping_logic: action.grouping_logic ?? null,
+    conflicts_resolved: action.conflicts_resolved || null,
+    confidence: params.confidenceByPriority.get(action.priority) ?? '中',
   }))
   return `<document_profile>
 ${JSON.stringify(params.documentProfile, null, 2)}
@@ -156,6 +183,8 @@ export async function generateFixPlans(params: {
   targetSp: string
   documentProfile: DocumentProfile
   prescription: ReviewPrescription
+  /** S4-⑥守门员：每个大问题关联issue的最强证据强度，用于矛盾裁决提示与confidence_caveat标记 */
+  confidenceByPriority: Map<number, ConfidenceDisplay>
   model: ModelConfig | null
   apiKey: string
   reviewId: string
@@ -182,6 +211,7 @@ export async function generateFixPlans(params: {
               documentProfile: params.documentProfile,
               actions: params.prescription.priority_actions,
               prescription: params.prescription,
+              confidenceByPriority: params.confidenceByPriority,
             }),
           },
         ],
@@ -210,7 +240,13 @@ export async function generateFixPlans(params: {
 
     const parsed = parseJsonObject<UnknownFixPlanResult>(result.content)
     const validPriorities = new Set(params.prescription.priority_actions.map((action) => action.priority))
-    return normalizeFixPlans(parsed.fix_plans, params.targetSp, validPriorities)
+    // S4-⑥：全部关联issue都是“仅供参考”的大问题，打上confidence_caveat供呈现层提示（代码层计算，不依靠模型自报）
+    const confidenceCaveatPriorities = new Set(
+      [...params.confidenceByPriority.entries()]
+        .filter(([, confidence]) => confidence === '仅供参考')
+        .map(([priority]) => priority),
+    )
+    return normalizeFixPlans(parsed.fix_plans, params.targetSp, validPriorities, confidenceCaveatPriorities)
   } catch {
     // 修复方案生成失败不阻塞报告：返回空，UI 显示"本次未生成修复建议"
     return []

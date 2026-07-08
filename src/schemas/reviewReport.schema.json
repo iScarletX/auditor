@@ -255,6 +255,9 @@
           },
           "no_fix_reason": {
             "type": "string"
+          },
+          "confidence_caveat": {
+            "const": true
           }
         }
       }

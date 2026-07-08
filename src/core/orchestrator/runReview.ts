@@ -14,7 +14,7 @@ import type {
 import { buildCheckPlan } from './checkPlanner'
 import { selectConsolidationModel } from './consolidationModelSelector'
 import { runConsolidationReview } from './consolidationReviewer'
-import { generateFixPlans } from './fixPlanGenerator'
+import { generateFixPlans, strongestConfidenceOf } from './fixPlanGenerator'
 import { runWithConcurrency } from './concurrencyPool'
 import { runDocumentProfile } from './documentProfiler'
 import { deduplicateIssues, mergeConsolidationIntoGroups } from './issueDeduplicator'
@@ -384,10 +384,23 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
     foundCount: deduplicated.groups.length,
     errors: [...allErrors],
   })
+  // S4-⑥守门员：为每个大问题计算关联issue的最强证据强度，供修法生成时矛盾裁决+往修法附加confidence_caveat标记
+  const findGroupByIssueId = (id: string) =>
+    finalIssues.find(
+      (group) => group.id === id || group.locations.some((location) => location.source_issue_id === id),
+    )
+  const confidenceByPriority = new Map(
+    prescription.priority_actions.map((action) => {
+      const relatedGroups = action.related_issue_ids.map(findGroupByIssueId).filter((group): group is (typeof finalIssues)[number] => Boolean(group))
+      const confidence = strongestConfidenceOf(relatedGroups.map((group) => group.confidence_display))
+      return [action.priority, confidence] as const
+    }),
+  )
   const fixPlans = await generateFixPlans({
     targetSp: params.targetSp,
     documentProfile,
     prescription,
+    confidenceByPriority,
     model: consolidationSelection.model,
     apiKey: params.apiKey,
     reviewId,

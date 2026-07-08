@@ -454,6 +454,12 @@ function ProblemDetail({
                   {fixPlan.group_note}
                 </p>
               ) : null}
+              {fixPlan.confidence_caveat ? (
+                <p className="mt-2 flex items-start gap-1.5 rounded-md bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  这个问题仅由单个模型提出（未获得交叉确认），下方修法仅供参考，建议人工复核后再应用。
+                </p>
+              ) : null}
               {fixPlan.edits.length === 0 ? (
                 <p className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-600">
                   {fixPlan.no_fix_reason ?? '此问题需要业务决策，无法给出文字级修复。'}

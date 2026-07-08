@@ -251,6 +251,8 @@ export interface ReviewReport {
     group_note?: string
     edits: Array<{ before_text: string; after_text: string; note: string }>
     no_fix_reason?: string
+    /** S4-⑥守门员：关联issue全部仅供参考时标记，呈现层提示重点复核 */
+    confidence_caveat?: true
   }>
   incomplete_checks: IncompleteCheck[]
   issues: IssueGroup[]
