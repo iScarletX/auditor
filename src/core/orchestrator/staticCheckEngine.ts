@@ -10,7 +10,7 @@ import type {
 
 export interface StaticCheckFact {
   /** 事实类型，例如 json_structure_detected / field_declarations_detected */
-  kind: 'json_structure_detected' | 'field_declarations_detected' | 'numeric_pair_candidates' | 'reference_target_candidates'
+  kind: 'json_structure_detected' | 'field_declarations_detected' | 'numeric_pair_candidates' | 'reference_target_candidates' | 'redundant_sentence_pairs'
   /** 人可读的事实摘要，含具体位置和完整程度描述 */
   summary: string
   /** 在原文中的行号范围 */
@@ -29,6 +29,8 @@ export interface StaticCheckFact {
   numeric_candidates?: NumericCandidate[]
   /** S3补齐：跨文件字段引用差集候选（静态穷举引用点+定义点，LLM只确认差集是否真悬空） */
   reference_candidates?: ReferenceCandidate[]
+  /** S3补齐：重复句对候选（静态n-gram相似度穷举，LLM只确认是否真冗余） */
+  redundant_pairs?: RedundantSentencePair[]
 }
 
 /** S3 L2桥接层：一个数字候选，含上下文、单位、概念关键词、所在文件/行号，便于LLM判断是否与其他候选互斥 */
@@ -60,6 +62,25 @@ export interface ReferenceCandidate {
   line_range: [number, number]
   /** 前后文片段 */
   context_snippet: string
+}
+
+/** S3补齐：一对静态相似度高的待确认重复平句——静态层只用字符n-gram相似度找候选，不判断是否“没有新信息”，
+ * 因为两句词面接近但可能是有意重复(强调/示例/模板引导语)，需LLM结合上下文确认。 */
+export interface RedundantSentencePair {
+  /** 句子A原文 */
+  sentence_a: string
+  /** 句子B原文 */
+  sentence_b: string
+  /** A行号范围 */
+  line_range_a: [number, number]
+  /** B行号范围 */
+  line_range_b: [number, number]
+  /** A所在文件（拼包场景） */
+  file_hint_a: string
+  /** B所在文件 */
+  file_hint_b: string
+  /** 静态层计算的jaccard相似度(0-1)，仅作参考，不代表真冗余 */
+  similarity: number
 }
 
 export interface StaticCheckResult {
@@ -421,6 +442,90 @@ function scanReferenceTargetFacts(targetSp: string): StaticCheckFact[] {
       '静态层不判定悬空，只提供候选，真悬空判定仍需LLM基于原文语境确认',
     ],
     reference_candidates: candidates.slice(0, 40),
+  }]
+}
+
+// ============ S3补齐: L2桥接层 —— 重复指令n-gram相似度(redundant_sentence_pairs) ============
+// 目的：静态先把全文拆句，用字符trigram jaccard相似度穷举高相似度句对（含跨文件），
+// 再交给LLM判断“这些句对里哪几对是没有新信息的真冗余”，而不是让LLM自己在全文搜索重复句。
+// 静态层不判定真假(相似不代表无意义，可能是有意强调/示例/模板引导语)，只提供候选缩小搜索范围。
+
+/** 把全文按句拆分(中文句号/英文句号/换行作为边界)，只保留长度在合理范围(8-200字)的句子，过短/过长不具备比较价值 */
+function splitIntoSentences(targetSp: string): Array<{ text: string; index: number }> {
+  const sentences: Array<{ text: string; index: number }> = []
+  const pattern = /[^\n。！？.!?]+[。！？.!?]?/g
+  let match: RegExpExecArray | null
+  pattern.lastIndex = 0
+  while ((match = pattern.exec(targetSp)) !== null) {
+    const text = match[0].trim()
+    if (text.length < 8 || text.length > 200) continue
+    // 排除纯markdown装饰/标题行/分割线/表格分隔行/纯代码片段标记，这类相似度高但无意义(实测校准：拼包场景下表格分隔行`|---|---|`会制造大量无意义候选)
+    if (/^[#=\-*`~|:\s]+$/.test(text)) continue
+    sentences.push({ text, index: match.index })
+  }
+  return sentences
+}
+
+/** 字符trigram集合(忽略空白)，用于jaccard相似度计算 */
+function charTrigramSet(text: string): Set<string> {
+  const normalized = text.replace(/\s+/g, '')
+  const grams = new Set<string>()
+  for (let i = 0; i <= normalized.length - 3; i += 1) grams.add(normalized.slice(i, i + 3))
+  if (grams.size === 0 && normalized.length > 0) grams.add(normalized)
+  return grams
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0
+  let intersection = 0
+  for (const gram of a) if (b.has(gram)) intersection += 1
+  const union = a.size + b.size - intersection
+  return union === 0 ? 0 : intersection / union
+}
+
+const REDUNDANCY_SIMILARITY_THRESHOLD = 0.6
+
+/**
+ * 穷举全文高相似度句对。O(n²)比对，只在句子数在合理范围(<=300)时执行，避免超长文本卡死。
+ * 只保留相似度>=阈值且两句不完全等的对(完全等同往往是标题/模板占位重复，无需LLM判断)。
+ */
+function scanRedundantSentenceFacts(targetSp: string): StaticCheckFact[] {
+  const sentences = splitIntoSentences(targetSp)
+  // 上限实测校准：拼包场景(10文件/55K字)常见达1000+句，O(n²)比对在2000句仍在500ms内，300太保守会让拼包场景静态层整体不产出（实测命中），提到更具代表性的1800
+  if (sentences.length < 2 || sentences.length > 1800) return []
+
+  const grams = sentences.map((s) => charTrigramSet(s.text))
+  const pairs: RedundantSentencePair[] = []
+  for (let i = 0; i < sentences.length; i += 1) {
+    for (let j = i + 1; j < sentences.length; j += 1) {
+      if (sentences[i].text === sentences[j].text) continue // 完全等同交给其他机制，不需LLM判断
+      const sim = jaccardSimilarity(grams[i], grams[j])
+      if (sim < REDUNDANCY_SIMILARITY_THRESHOLD) continue
+      pairs.push({
+        sentence_a: sentences[i].text,
+        sentence_b: sentences[j].text,
+        line_range_a: lineRangeForIndex(targetSp, sentences[i].index, sentences[i].text.length),
+        line_range_b: lineRangeForIndex(targetSp, sentences[j].index, sentences[j].text.length),
+        file_hint_a: nearestFileHint(targetSp, sentences[i].index),
+        file_hint_b: nearestFileHint(targetSp, sentences[j].index),
+        similarity: Math.round(sim * 100) / 100,
+      })
+    }
+  }
+
+  if (pairs.length === 0) return []
+  // 按相似度降序，只保留最高相似度的前30对，避免向LLM堠太大候选集
+  pairs.sort((a, b) => b.similarity - a.similarity)
+  const top = pairs.slice(0, 30)
+
+  return [{
+    kind: 'redundant_sentence_pairs',
+    summary: `静态层已用字符n-gram相似度穷举到 ${top.length} 对高相似度但不完全等同的句对。相似不代表无意义，需判断是否没有新信息。`,
+    completeness_notes: [
+      `共 ${top.length} 对候选，相似度范围 ${top[top.length - 1].similarity}~${top[0].similarity}`,
+      '静态层仅提供相似度数值，不判断真假冗余，真冗余判定需LLM基于上下文完成',
+    ],
+    redundant_pairs: top,
   }]
 }
 
@@ -881,6 +986,8 @@ export function runStaticCheckEngine(skill: SkillDefinition, targetSp: string): 
   if (skill.id === '01_clarity_contradiction') facts = scanNumericPairFacts(targetSp)
   // S3补齐: L2桥接层——跨文件字段引用差集，专治“规则孤儿”型删除缺陷(C5/C6同类)
   if (skill.id === '02_contract_dangling_reference') facts = scanReferenceTargetFacts(targetSp)
+  // S3补齐: L2桥接层——重复指令n-gram相似度穷举，专治“重复冗余”检查项靠LLM全文搜索重复句漏报/不稳定
+  if (skill.id === '01_clarity_redundancy') facts = scanRedundantSentenceFacts(targetSp)
 
   return {
     skill_id: skill.id,

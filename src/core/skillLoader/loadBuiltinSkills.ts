@@ -79,6 +79,7 @@ const builtinSeeds: BuiltinSkillSeed[] = [
     category: 'clarity',
     title: '重复冗余',
     severity: 'minor',
+    executionMode: 'hybrid',
     description: '检查重复规则是否稀释注意力或导致模型权重不稳定。',
     check: '找出重复出现且没有新增信息的规则、示例或风格限制。',
     fix: '合并重复规则，保留最具体的一条。',
