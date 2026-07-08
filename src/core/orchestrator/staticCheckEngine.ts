@@ -10,7 +10,7 @@ import type {
 
 export interface StaticCheckFact {
   /** 事实类型，例如 json_structure_detected / field_declarations_detected */
-  kind: 'json_structure_detected' | 'field_declarations_detected'
+  kind: 'json_structure_detected' | 'field_declarations_detected' | 'numeric_pair_candidates'
   /** 人可读的事实摘要，含具体位置和完整程度描述 */
   summary: string
   /** 在原文中的行号范围 */
@@ -25,6 +25,24 @@ export interface StaticCheckFact {
   completeness_notes: string[]
   /** 原文证据片段（截断） */
   evidence_snippet?: string
+  /** S3 L2桥接层：数字候选清单（静态穷举，LLM只判断哪些是真矛盉，不自己搜索全文） */
+  numeric_candidates?: NumericCandidate[]
+}
+
+/** S3 L2桥接层：一个数字候选，含上下文、单位、概念关键词、所在文件/行号，便于LLM判断是否与其他候选互斥 */
+export interface NumericCandidate {
+  /** 原始数字文本，如 "75" "3轮" "30%" */
+  raw_text: string
+  /** 归一化单位提示，如 "%"/"轮"/"镜"/"分"/"字"，无单位时为空字符串 */
+  unit_hint: string
+  /** 附近的约束类关键词，如 "上限"/"及格线"/"权重"/"预算"，无则为空字符串 */
+  concept_hint: string
+  /** 最近的 ===== FILE: xxx ===== 标记（拼包场景下用于跨文件定位），无则为空字符串 */
+  file_hint: string
+  /** 行号范围 */
+  line_range: [number, number]
+  /** 前后文片段，便于LLM确认语境 */
+  context_snippet: string
 }
 
 export interface StaticCheckResult {
@@ -223,6 +241,74 @@ function scanFieldDeclarationFacts(targetSp: string): StaticCheckFact[] {
     field_count: names.length,
     field_names: names.slice(0, 30),
     completeness_notes: completeness,
+  }]
+}
+
+// ============ S3: L2桥接层 —— 数字对穷举(numeric_pair_candidates) ============
+// 目的：静态先把全文所有"数字+单位/约束词"候选穷举出来（含所在文件/行号），
+// 再交给LLM判断“这些候选里哪些是同一概念的互斥值”，而不是让LLM自己在全文搜索数字对。
+// 根因：WS1基线铁打发现“数值矛盉非稳定强项：相邻数字打架易抓，跨文件跨段落易漏”——
+// 本函数专治“跨文件跨段落漏报”，静态层不判定矛盉（不知道哪两个概念上的真矛盉），只穷举候选+给足上下文。
+
+const NUMERIC_CANDIDATE_PATTERN = /(\d+(?:\.\d+)?)\s*(%|\u4e2a|\u5f20|\u6761|\u9879|\u6bb5|\u8f6e|\u955c|\u5b57|\u6b21|\u5206|\u65e5|\u5c0f\u65f6|tokens?)?/g
+
+// 附近约束类关键词，用于给候选标注“这个数字可能属于哪个概念”，不判断对错，仅作提示
+const CONCEPT_HINT_PATTERN = /\u4e0a\u9650|\u4e0b\u9650|\u6700\u591a|\u6700\u5c11|\u6700\u957f|\u6700\u77ed|\u4e0d\u8d85\u8fc7|\u4e0d\u5c11\u4e8e|\u53ca\u683c\u7ebf|\u901a\u8fc7\u7ebf|\u6743\u91cd|\u9884\u7b97|\u91cd\u8bd5|retry|max_retry|\u8f6e\u6b21|\u9891\u7387|\u9608\u503c|threshold|limit/i
+
+/** 从文本中提取最近的 ===== FILE: xxx ===== 标记（拼包场景用于跨文件定位，非拼包时无则为空） */
+function nearestFileHint(targetSp: string, index: number): string {
+  const before = targetSp.slice(0, index)
+  const match = [...before.matchAll(/={3,}\s*FILE:\s*(\S+)\s*={3,}/g)].pop()
+  return match?.[1] ?? ''
+}
+
+/**
+ * 穷举全文所有“数字(+单位)”候选，为每个候选附上所在文件/行号/前后文。
+ * 只在候选数量在合理范围内(2-60个)时产出事实，避免对几乎无数字或数字滥成灾的文本产出无意义大量噪声。
+ */
+function scanNumericPairFacts(targetSp: string): StaticCheckFact[] {
+  const candidates: NumericCandidate[] = []
+  let match: RegExpExecArray | null
+  NUMERIC_CANDIDATE_PATTERN.lastIndex = 0
+  while ((match = NUMERIC_CANDIDATE_PATTERN.exec(targetSp)) !== null) {
+    const index = match.index
+    const rawNumber = match[1]
+    const unit = match[2] ?? ''
+    // 单独的年份/版本号类四位数不纳入(如 2026/3.0.0 里的3)，降噪
+    if (!unit && (rawNumber.length >= 4 || /^\d\.\d+\.\d+/.test(targetSp.slice(index, index + 12)))) continue
+
+    const contextStart = Math.max(0, index - 30)
+    const contextEnd = Math.min(targetSp.length, index + match[0].length + 30)
+    const contextSnippet = targetSp.slice(contextStart, contextEnd).replace(/\s+/g, ' ').trim()
+    const conceptMatch = CONCEPT_HINT_PATTERN.exec(
+      targetSp.slice(Math.max(0, index - 40), Math.min(targetSp.length, index + match[0].length + 20)),
+    )
+
+    candidates.push({
+      raw_text: match[0].trim(),
+      unit_hint: unit,
+      concept_hint: conceptMatch?.[0] ?? '',
+      file_hint: nearestFileHint(targetSp, index),
+      line_range: lineRangeForIndex(targetSp, index, match[0].length),
+      context_snippet: contextSnippet,
+    })
+  }
+
+  if (candidates.length < 2 || candidates.length > 400) return []
+
+  // 只保留“带概念提示或带单位”的候选，纯裸数字无上下文线索的不值得交给LLM判矛盉
+  const meaningful = candidates.filter((c) => c.unit_hint || c.concept_hint)
+  if (meaningful.length < 2) return []
+
+  const fileCount = new Set(meaningful.map((c) => c.file_hint).filter(Boolean)).size
+  return [{
+    kind: 'numeric_pair_candidates',
+    summary: `已静态穷举到 ${meaningful.length} 个带单位/约束词提示的数字候选${fileCount > 1 ? `，跨 ${fileCount} 个文件` : ''}。请逐个对比这些候选，判断哪几对指向同一概念但取值互斥(真矛盉)，而不是自己在全文搜索数字对。特别注意跨文件/跨段落的候选对，这正是LLM容易漏报的区域。`,
+    completeness_notes: [
+      `共 ${meaningful.length} 个候选，分布在 ${fileCount || 1} 个文件中`,
+      '静态层不判定矛盉，仅提供候选清单，真矛盉判定交由LLM基于原文语境完成',
+    ],
+    numeric_candidates: meaningful.slice(0, 60),
   }]
 }
 
@@ -679,6 +765,8 @@ export function runStaticCheckEngine(skill: SkillDefinition, targetSp: string): 
   if (skill.id === '04_interop_symbol_conflict') issues = runSymbolConflict(skill, targetSp)
   if (skill.id === '05_robustness_secret_leak') issues = runSecretScan(skill, targetSp)
   if (skill.id === '05_robustness_skill_dangerous_pattern') issues = runSkillSafetyScan(skill, targetSp)
+  // S3: L2桥接层——数字对穷举，专治“内部矛盉”检查项的跨文件/跨段落数值矛盉漏报
+  if (skill.id === '01_clarity_contradiction') facts = scanNumericPairFacts(targetSp)
 
   return {
     skill_id: skill.id,

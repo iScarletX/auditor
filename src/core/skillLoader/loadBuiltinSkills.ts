@@ -32,8 +32,9 @@ const builtinSeeds: BuiltinSkillSeed[] = [
     category: 'clarity',
     title: '内部矛盾',
     severity: 'critical',
-    description: '检查 prompt 中是否存在互相冲突的职责、格式、风格或优先级。',
-    check: '查找显式冲突的要求，例如既要求 JSON 又要求自然段、既要求完整又要求极短。',
+    executionMode: 'hybrid',
+    description: '检查 prompt 中是否存在互相冲突的职责、格式、风格或优先级，包括数值矛盾（静态层先穷举数字候选，再交由模型判断真假）。',
+    check: '查找显式冲突的要求，例如既要求 JSON 又要求自然段、既要求完整又要求极短；一定要逐个核对 static_check_results.facts 里的 numeric_candidates 候选，判断哪几对指向同一概念但取值互斥，特别关注跨文件/跨段落的候选对。',
     fix: '删除或合并冲突规则，并声明最终优先级。',
   },
   {

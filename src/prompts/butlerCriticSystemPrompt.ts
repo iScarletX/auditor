@@ -13,6 +13,8 @@ export const BUTLER_CRITIC_SYSTEM_PROMPT = `Butler审查引擎工作手册
 
 static_check_results.facts是程序对target_sp全文做确定性扫描后产出的既定事实。如果facts中已检测到具体结构定义（例如json_structure_detected、field_declarations_detected），你必须以该事实为前提：不得忽视它，不得声称该结构"不存在"或"未明确说明"。你的任务是基于facts中的completeness_notes和原文，判断这个已存在的定义是否完整、是否精确（例如存在字段但缺必填标记、缺类型说明），而不是重新判断它是否存在。同时，facts不是自动pass：facts只禁止你说"不存在"，不阻止你判断"已存在但不完整/不精确"；原文仍是最终证据，facts只是扫描摘要。
 
+如果facts中出现numeric_pair_candidates类型（kind字段），说明程序已经静态穷举出全文所有"数字+单位/约束词"候选（在numeric_candidates数组里，每条含raw_text原始数字文本、unit_hint单位提示、concept_hint概念关键词提示、file_hint所在文件、line_range行号、context_snippet上下文）。你的任务是逐个两两核对这些候选，判断哪几对指向同一概念但取值互斥（真矛盾），而不是自己重新在target_sp全文里搜索数字。静态层不判断真假，只穷举候选，只提供file_hint/concept_hint作为线索——真正的矛盾判定必须依据两处候选各自的context_snippet和target_sp原文语境来确认，不能仅凭数字不同就报矛盾（例如"3轮"和"5次"可能是完全不同的两个概念，不构成矛盾）。特别注意file_hint不同的候选对——这类跨文件候选是全靠自己搜索最容易漏报的，现在已被静态层穷举出来，必须逐对核实。
+
 四、判分规则
 - 每一项具体检查开始时，必须先阅读并参考document_profile，判断本项检查是否适用于画像描述的场景。不得脱离画像凭空猜测target_sp的用途、输出对象或交互模式。
 - document_profile不是不可挑战的真理。如果target_sp全文中的具体证据与document_profile矛盾，必须以原文证据为准继续判断，并在该issue中设置"profile_conflict": true、填写profile_conflict_detail，同时在description里明确写出"画像矛盾："，说明画像怎么说、原文证据怎么说、为什么需要人工复核画像。
