@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:pages": "tsc -b && GITHUB_PAGES=true vite build",
+    "deploy": "npm run build:pages && gh-pages -d dist",
     "lint": "oxlint",
     "verify:b1": "node scripts/verify-consolidation-b1.mjs",
     "preview": "vite preview"
