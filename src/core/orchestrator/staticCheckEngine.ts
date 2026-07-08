@@ -10,7 +10,7 @@ import type {
 
 export interface StaticCheckFact {
   /** 事实类型，例如 json_structure_detected / field_declarations_detected */
-  kind: 'json_structure_detected' | 'field_declarations_detected' | 'numeric_pair_candidates'
+  kind: 'json_structure_detected' | 'field_declarations_detected' | 'numeric_pair_candidates' | 'reference_target_candidates'
   /** 人可读的事实摘要，含具体位置和完整程度描述 */
   summary: string
   /** 在原文中的行号范围 */
@@ -27,6 +27,8 @@ export interface StaticCheckFact {
   evidence_snippet?: string
   /** S3 L2桥接层：数字候选清单（静态穷举，LLM只判断哪些是真矛盉，不自己搜索全文） */
   numeric_candidates?: NumericCandidate[]
+  /** S3补齐：跨文件字段引用差集候选（静态穷举引用点+定义点，LLM只确认差集是否真悬空） */
+  reference_candidates?: ReferenceCandidate[]
 }
 
 /** S3 L2桥接层：一个数字候选，含上下文、单位、概念关键词、所在文件/行号，便于LLM判断是否与其他候选互斥 */
@@ -42,6 +44,21 @@ export interface NumericCandidate {
   /** 行号范围 */
   line_range: [number, number]
   /** 前后文片段，便于LLM确认语境 */
+  context_snippet: string
+}
+
+/** S3补齐：一个引用候选——某处文本提及了“见§X/依据某规则/自检第N条/由某门槛拦截”这类对外部目标的依赖，
+ * 但静态层不知道该目标在文档内是否真存在对应定义——这需LLM结合定义点清单逐条确认。 */
+export interface ReferenceCandidate {
+  /** 引用文本本身，如 "自检第7条" "见§2.3" "依据 retry 规则表" */
+  raw_text: string
+  /** 引用类型提示，如 "自检项"/"章节号"/"规则表"/"字段枚举"/"配置键" */
+  ref_type_hint: string
+  /** 最近的 ===== FILE: xxx ===== 标记（拼包场景用于跨文件定位），无则为空字符串 */
+  file_hint: string
+  /** 行号范围 */
+  line_range: [number, number]
+  /** 前后文片段 */
   context_snippet: string
 }
 
@@ -309,6 +326,101 @@ function scanNumericPairFacts(targetSp: string): StaticCheckFact[] {
       '静态层不判定矛盉，仅提供候选清单，真矛盉判定交由LLM基于原文语境完成',
     ],
     numeric_candidates: meaningful.slice(0, 60),
+  }]
+}
+
+// ============ S3补齐: L2桥接层 —— 跨文件字段引用差集(reference_target_candidates) ============
+// 目的：静态先把全文所有“引用某规则/自检项/章节/配置键”的引用点、以及所有“标题/编号条目”的定义点分别提取出来，
+// 在代码层先做一次粗差集（引用文本能否在任何定义点里找到相关词根），
+// 只把“粗差集层面找不到任何命中证据”的引用点作为高价值候选交给LLM确认——
+// 正面欺带专治 WS1铁打发现“标题/自检项”篇敲除后引用方无人发现的“规则孤儿”型删除缺陷(C5/C6)。
+
+// 引用点：“见§2.3”“见第3步”“自检第7条”“依据 retry 规则表”“由...门槛拦截”“遵循...规则”“参照...步骤”等
+const REFERENCE_POINT_PATTERN =
+  /(?:见|参照|参考|依据|按照|遵循|回退到|退回到?)\s*(?:§|第)?\s*([\u4e00-\u9fa5A-Za-z0-9._]{1,16}?(?:条|步|章|节|规则|门槛|表|清单|标准|流程))|(?:自检|检查清单|checklist)\s*(?:第)?\s*([0-9一二三四五六七八九十]{1,4})\s*条|由\s*([\u4e00-\u9fa5A-Za-z0-9._]{2,16}?(?:规则|门槛|判断|校验))\s*(?:拦截|判死|否决|驳回)/g
+
+// 定义点：标题行(# 或 数字编号标题)、自检/规则清单的编号条目(如 "7. xxx" "第7条 xxx")
+// 区块a: markdown标题；区块b: “1. xxx”/“第1、xxx”等编号列表；区块c: “第3步/第7条/第2章 xxx”这类带量词的步骤/条目标题（常见于skill文档流程/自检清单）
+const DEFINITION_HEADING_PATTERN =
+  /^#{1,6}\s*(.+)$|^\s*(?:第)?([0-9一二三四五六七八九十]{1,4})[.、\s]+(.{2,40})$|^\s*第([0-9一二三四五六七八九十]{1,4})(?:步|条|章|节)\s*(.{2,40})$/gm
+
+/** 提取所有定义点的“可辨识词根”集合，用于与引用点做粗差集匹配。只取字符串扎2个以上的中文/词，降噪。 */
+function extractDefinitionTokens(targetSp: string): Set<string> {
+  const tokens = new Set<string>()
+  let match: RegExpExecArray | null
+  DEFINITION_HEADING_PATTERN.lastIndex = 0
+  while ((match = DEFINITION_HEADING_PATTERN.exec(targetSp)) !== null) {
+    const text = (match[1] ?? match[3] ?? match[5] ?? '').trim()
+    if (!text) continue
+    // 拆词：取至4字以上的中文字段/英文词作为可匹配词根
+    const zh = text.match(/[\u4e00-\u9fa5]{2,}/g) ?? []
+    const en = text.match(/[A-Za-z]{3,}/g) ?? []
+    for (const t of [...zh, ...en]) tokens.add(t.toLowerCase())
+    // 若行首带数字编号（如“第7条”“7.”“第3步”），编号本身也记为定义点标识
+    if (match[2]) tokens.add(`#${match[2]}`)
+    if (match[4]) tokens.add(`#${match[4]}`)
+  }
+  return tokens
+}
+
+/** 判断一个引用文本能否在定义词根集合里找到任何命中证据（只要命中一个字段就视为“可能存在”，宁可多放不少放） */
+function hasAnyDefinitionEvidence(refText: string, definitionTokens: Set<string>): boolean {
+  const zh = refText.match(/[\u4e00-\u9fa5]{2,}/g) ?? []
+  const en = refText.match(/[A-Za-z]{3,}/g) ?? []
+  const num = refText.match(/[0-9一二三四五六七八九十]{1,4}/g) ?? []
+  for (const t of zh) if (definitionTokens.has(t)) return true
+  for (const t of en) if (definitionTokens.has(t.toLowerCase())) return true
+  for (const n of num) if (definitionTokens.has(`#${n}`)) return true
+  return false
+}
+
+/**
+ * 静态先粗差集：提取所有引用点 + 所有定义点词根，只保留“在定义点集合里完全找不到任何词根命中”的引用点，
+ * 交给LLM逐条确认是否真悬空（可能存在描述方式差异导致词根未命中但实际存在定义，因此静态层不直接判found，只提供候选）。
+ * 候选数量在合理范围（1-40个）时才产出facts，避免正则误匹配制造大量噪声。
+ */
+function scanReferenceTargetFacts(targetSp: string): StaticCheckFact[] {
+  const definitionTokens = extractDefinitionTokens(targetSp)
+  const candidates: ReferenceCandidate[] = []
+  let match: RegExpExecArray | null
+  REFERENCE_POINT_PATTERN.lastIndex = 0
+  while ((match = REFERENCE_POINT_PATTERN.exec(targetSp)) !== null) {
+    const rawText = match[0].trim()
+    const refBody = (match[1] ?? match[2] ?? match[3] ?? '').trim()
+    if (!refBody) continue
+    if (hasAnyDefinitionEvidence(refBody, definitionTokens)) continue // 能找到词根证据的直接不纳入候选，降噪
+
+    const index = match.index
+    const contextStart = Math.max(0, index - 40)
+    const contextEnd = Math.min(targetSp.length, index + match[0].length + 40)
+    const refTypeHint = /自检|checklist/i.test(rawText)
+      ? '自检项编号'
+      : /规则表|规则/.test(rawText)
+        ? '规则表'
+        : /门槛|判死|拦截|否决|驳回/.test(rawText)
+          ? '判定门槛'
+          : '章节/步骤引用'
+
+    candidates.push({
+      raw_text: rawText,
+      ref_type_hint: refTypeHint,
+      file_hint: nearestFileHint(targetSp, index),
+      line_range: lineRangeForIndex(targetSp, index, match[0].length),
+      context_snippet: targetSp.slice(contextStart, contextEnd).replace(/\s+/g, ' ').trim(),
+    })
+  }
+
+  if (candidates.length < 1 || candidates.length > 40) return []
+
+  const fileCount = new Set(candidates.map((c) => c.file_hint).filter(Boolean)).size
+  return [{
+    kind: 'reference_target_candidates',
+    summary: `静态层已粗差集定位到 ${candidates.length} 个引用点，在全文标题/编号条目中找不到任何词根匹配证据${fileCount > 1 ? `，跨 ${fileCount} 个文件` : ''}。这不代表它们一定悬空(可能描述方式差异导致未命中)，但值得重点复核。`,
+    completeness_notes: [
+      `共 ${candidates.length} 个高可能悬空候选，静态层已先粗筛掉能找到词根证据的引用点`,
+      '静态层不判定悬空，只提供候选，真悬空判定仍需LLM基于原文语境确认',
+    ],
+    reference_candidates: candidates.slice(0, 40),
   }]
 }
 
@@ -767,6 +879,8 @@ export function runStaticCheckEngine(skill: SkillDefinition, targetSp: string): 
   if (skill.id === '05_robustness_skill_dangerous_pattern') issues = runSkillSafetyScan(skill, targetSp)
   // S3: L2桥接层——数字对穷举，专治“内部矛盉”检查项的跨文件/跨段落数值矛盉漏报
   if (skill.id === '01_clarity_contradiction') facts = scanNumericPairFacts(targetSp)
+  // S3补齐: L2桥接层——跨文件字段引用差集，专治“规则孤儿”型删除缺陷(C5/C6同类)
+  if (skill.id === '02_contract_dangling_reference') facts = scanReferenceTargetFacts(targetSp)
 
   return {
     skill_id: skill.id,

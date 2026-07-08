@@ -180,6 +180,7 @@ const builtinSeeds: BuiltinSkillSeed[] = [
     category: 'contract',
     title: '悬空引用与缺失定义',
     severity: 'critical',
+    executionMode: 'hybrid',
     description:
       '检查文档内部的交叉引用是否落空：某处引用/依赖了另一处的规则、字段、步骤、章节号、自检项、配置键或枚举值，但被引用的目标在文档中找不到对应定义。这是发现“规则被删除后留下引用悬空”这类缺失型缺陷的核心手段。',
     check:
