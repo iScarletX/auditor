@@ -89,6 +89,7 @@ const builtinSeeds: BuiltinSkillSeed[] = [
     category: 'clarity',
     title: '优先级不清',
     severity: 'major',
+    executionMode: 'hybrid',
     description: '检查多个目标冲突时是否声明优先级。',
     check: '判断安全、格式、完整性、简洁性、风格之间发生冲突时是否有处理顺序。',
     fix: '增加优先级列表，例如安全高于准确，准确高于格式，格式高于风格。',

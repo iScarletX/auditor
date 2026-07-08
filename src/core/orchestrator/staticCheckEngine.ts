@@ -10,7 +10,7 @@ import type {
 
 export interface StaticCheckFact {
   /** 事实类型，例如 json_structure_detected / field_declarations_detected */
-  kind: 'json_structure_detected' | 'field_declarations_detected' | 'numeric_pair_candidates' | 'reference_target_candidates' | 'redundant_sentence_pairs'
+  kind: 'json_structure_detected' | 'field_declarations_detected' | 'numeric_pair_candidates' | 'reference_target_candidates' | 'redundant_sentence_pairs' | 'priority_declaration_candidates'
   /** 人可读的事实摘要，含具体位置和完整程度描述 */
   summary: string
   /** 在原文中的行号范围 */
@@ -31,6 +31,8 @@ export interface StaticCheckFact {
   reference_candidates?: ReferenceCandidate[]
   /** S3补齐：重复句对候选（静态n-gram相似度穷举，LLM只确认是否真冗余） */
   redundant_pairs?: RedundantSentencePair[]
+  /** S3补齐：优先级声明句候选（静态穷举所有“X优先于Y/先X后Y”声明，LLM只确认是否存在互斥声明） */
+  priority_declarations?: PriorityDeclarationCandidate[]
 }
 
 /** S3 L2桥接层：一个数字候选，含上下文、单位、概念关键词、所在文件/行号，便于LLM判断是否与其他候选互斥 */
@@ -81,6 +83,22 @@ export interface RedundantSentencePair {
   file_hint_b: string
   /** 静态层计算的jaccard相似度(0-1)，仅作参考，不代表真冗余 */
   similarity: number
+}
+
+/** S3补齐：一条优先级声明候选——“A优先于B”/“先A后B”/“A>B”这类声明两个概念的相对先后次序，静态层不判断是否与其他声明互斥，只提供候选供LLM两两比对。 */
+export interface PriorityDeclarationCandidate {
+  /** 声明原文 */
+  raw_text: string
+  /** 被声明为优先/在前的概念文本 */
+  higher_concept: string
+  /** 被声明为次要/在后的概念文本 */
+  lower_concept: string
+  /** 行号范围 */
+  line_range: [number, number]
+  /** 所在文件（拼包场景） */
+  file_hint: string
+  /** 前后文片段 */
+  context_snippet: string
 }
 
 export interface StaticCheckResult {
@@ -526,6 +544,60 @@ function scanRedundantSentenceFacts(targetSp: string): StaticCheckFact[] {
       '静态层仅提供相似度数值，不判断真假冗余，真冗余判定需LLM基于上下文完成',
     ],
     redundant_pairs: top,
+  }]
+}
+
+// ============ S3补齐: L2桥接层 —— 优先级声明句穷举(priority_declaration_candidates) ============
+// 目的：静态先把全文所有“A优先于B/先A后B/A>B/A高于B优先级”这类两概念先后关系声明穷举出来，
+// 再交给LLM两两比对判断“哪几对是同一对概念但先后顺序互斥”(真矛盾)，对应蓝图 C8 这类优先级链倒置。
+
+// 形式1: "A 优先于/高于/优于/重于/大于 B"；形式2: "A > B"(英文大于号)。
+// 注意：不包含"先A后B"这类句式——它表达的是执行步骤时序(procedural sequence)，
+// 与“冲的时谁话事”的权威/裁决优先级(precedence)是完全不同的语义维度，实测混入同一候选池会导致大量假阳性
+// (如"先改文字再重试"被误判与"用户优先于一切"矛盾，但前者是操作建议后者是裁决权声明，根本不是同一事)。
+const PRIORITY_DECLARATION_PATTERN =
+  /([\u4e00-\u9fa5A-Za-z0-9_]{2,20}?)\s*(?:优先于|高于（?优先级）?|重于|大于（?优先级）?)\s*([\u4e00-\u9fa5A-Za-z0-9_]{2,20})|([\u4e00-\u9fa5A-Za-z0-9_]{2,20}?)\s*>\s*([\u4e00-\u9fa5A-Za-z0-9_]{2,20})(?!\d)/g
+
+/**
+ * 穷举全文所有优先级声明候选。只在候选数在合理范围(2-50)时产出facts，
+ * 小于2无法构成对比，大于50往往是正则误匹配(如数字比大小号被误识为优先级)，降噪。
+ */
+function scanPriorityDeclarationFacts(targetSp: string): StaticCheckFact[] {
+  const candidates: PriorityDeclarationCandidate[] = []
+  let match: RegExpExecArray | null
+  PRIORITY_DECLARATION_PATTERN.lastIndex = 0
+  while ((match = PRIORITY_DECLARATION_PATTERN.exec(targetSp)) !== null) {
+    const higher = (match[1] ?? match[3] ?? '').trim()
+    const lower = (match[2] ?? match[4] ?? '').trim()
+    if (!higher || !lower) continue
+    // 排除纯数字比大小(如“15>10”这类数值比较，不是优先级声明)，只保留至少一侧含中文或英文字母的概念词
+    if (!/[\u4e00-\u9fa5A-Za-z]/.test(higher) || !/[\u4e00-\u9fa5A-Za-z]/.test(lower)) continue
+    if (higher === lower) continue
+
+    const index = match.index
+    const contextStart = Math.max(0, index - 30)
+    const contextEnd = Math.min(targetSp.length, index + match[0].length + 30)
+    candidates.push({
+      raw_text: match[0].trim(),
+      higher_concept: higher,
+      lower_concept: lower,
+      line_range: lineRangeForIndex(targetSp, index, match[0].length),
+      file_hint: nearestFileHint(targetSp, index),
+      context_snippet: targetSp.slice(contextStart, contextEnd).replace(/\s+/g, ' ').trim(),
+    })
+  }
+
+  if (candidates.length < 2 || candidates.length > 50) return []
+
+  const fileCount = new Set(candidates.map((c) => c.file_hint).filter(Boolean)).size
+  return [{
+    kind: 'priority_declaration_candidates',
+    summary: `静态层已穷举到 ${candidates.length} 条优先级声明候选${fileCount > 1 ? `，跨 ${fileCount} 个文件` : ''}。请两两比对，判断哪几对是同一对概念但先后顺序互斥(真矛盾)，而不是自己在全文里搜索优先级声明。`,
+    completeness_notes: [
+      `共 ${candidates.length} 条候选，分布在 ${fileCount || 1} 个文件中`,
+      '静态层不判定互斥，仅提供候选清单，真矛盾判定交由LLM基于原文语境完成',
+    ],
+    priority_declarations: candidates.slice(0, 50),
   }]
 }
 
@@ -988,6 +1060,8 @@ export function runStaticCheckEngine(skill: SkillDefinition, targetSp: string): 
   if (skill.id === '02_contract_dangling_reference') facts = scanReferenceTargetFacts(targetSp)
   // S3补齐: L2桥接层——重复指令n-gram相似度穷举，专治“重复冗余”检查项靠LLM全文搜索重复句漏报/不稳定
   if (skill.id === '01_clarity_redundancy') facts = scanRedundantSentenceFacts(targetSp)
+  // S3补齐: L2桥接层——优先级声明句穷举，专治优先级链倒置/互斥声明漏报(对应C8类)
+  if (skill.id === '01_clarity_priority_unclear') facts = scanPriorityDeclarationFacts(targetSp)
 
   return {
     skill_id: skill.id,
