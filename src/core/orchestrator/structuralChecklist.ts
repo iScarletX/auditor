@@ -7,48 +7,68 @@ import type { StructuralPattern } from '../../types/reviewReport.types'
 // 新业务类型只要展现出同样的结构形态（比如另一个完全不同领域的 skill 只要也有"判死规则"），
 // 这份清单依然适用，不会因为业务变了就失效——这正是"通用视角库+分型清单"不掉坑的关键。
 //
-// 每条清单描述"这种结构形态通常应该有什么支撑要素"，供LLM在L3阶段主动对照检查"有没有缺失"，
-// 而不是被动等文档暴露错误——这是治"只审写了什么、不看该有却没有"这个系统性盲区的核心武器。
+// v2修正（第一次真实验证后的教训）：初版把清单整段当"参考文本"喂给LLM，实测B1完全被最显眼的矛盾(sp_en画风错误)
+// 吸引注意力，完全没碰清单要求排查的删除型缺陷——说明"温和参考"这种forcing不够强，LLM会跳过隐性排查。
+// 改为"强制逐项作答"：每条清单项带唯一ID，要求B1在输出中必须对每个ID显式给出排查结论（即使是"未发现问题"），
+// 而不是让LLM自由选择要不要看。这是问卷式forcing function，比"自由参考"更能保证真被执行。
 
-const CHECKLISTS: Record<StructuralPattern, string> = {
-  gate_rules: `本文档含"判死/否决/不成立/拦截"类硬性门槛规则。这类规则天生容易被"规则孤儿化"删除——判定动作的引用（比如"检查项7"、"某某测试"、"某规则判死"）还留着，但判定标准本身的定义段落被整体删掉，且文档读起来仍然通顺（因为删除不留语法痕迹）。核对清单：
-1. 每一处"判死/否决/不成立/拦截"的判定动作，是否都能在文档中找到对应的具体判定标准定义（不是仅有判定动作的引用，而是标准本身写没写清楚）？
-2. 是否存在"自检清单/检查步骤"里点名了某条判定规则（如"第N条测试"、"某某判死"），但正文找不到这条规则的具体内容？
-3. 判死类规则的判定条件是否完整（不是"表情不对判死"这种模糊表述，而是有具体的可操作标准）？`,
-
-  numbered_checklist: `本文档含编号自检清单/输出前检查清单。这类清单里的每一条编号，其判定逻辑应该能在文档别处找到对应定义（清单条目本身经常只是"引用"，不是"定义"）。核对清单：
-1. 清单里的每一条编号，指向的判定逻辑/标准是否在文档正文里有完整定义？是否存在"编号存在但对应的判定内容找不到"的规则孤儿？
-2. 清单条目之间的编号是否连续、有没有跳号（跳号可能是删除后遗留的痕迹）？
-3. 清单里是否有条目内容本身就是模糊表述（比如"表情自然"这种缺乏可操作标准的判定），无法真正执行核查？`,
-
-  multi_step_pipeline: `本文档含多步骤流水线/状态机/分工序处理。这类结构里，某一步骤的"硬约束/核心规则"经常独立成段，容易被单独删除而不破坏整体流程的可读性（读起来仍然通顺，只是少了这条约束）。核对清单：
-1. 每个步骤声明的核心约束/硬性要求，是否都有具体的判定标准，而不只是"注意XX"这种提醒性文字？
-2. 步骤之间是否存在"某步骤依赖前置步骤产出某个字段/某个判定结果"，但该字段/判定结果在前置步骤定义里找不到对应产出说明？
-3. 流水线的退回/重试/异常处理逻辑，是否覆盖了所有步骤（有没有某个步骤缺失对应的失败处理路径）？`,
-
-  enum_or_forbidden_list: `本文档含枚举取值范围声明或禁用词/禁用行为清单。这类清单容易被"悄悄删词"——清单本身还在、格式完好，但某些原本该有的禁用项/枚举值被移除，且没有任何语法痕迹。核对清单：
-1. 禁用词/禁用行为清单本身是否完整（结合document_purpose和上下文，是否有明显应该被禁用但清单里没有的高风险项）？
-2. 是否存在"自检/校验逻辑仍在检查某个已被移除的禁用项"（自检逻辑与清单内容不同步的痕迹）？
-3. 枚举取值范围是否与文档其他地方引用该枚举字段时的实际用法一致（有没有其他地方引用了枚举清单里不存在的值）？`,
-
-  cross_file_reference: `本文档存在对其他文件/配置表/数据表的引用依赖（多文件拼包场景）。跨文件引用是删除型缺陷最容易隐藏的地方——因为改动只发生在被引用的那个文件里，引用方文件完全不知情，也不会有任何冲突提示。核对清单：
-1. 每一处跨文件引用（"见assets/xxx"、"依据某表"、"由某配置决定"），被引用的目标文件/字段/表项是否真实存在，内容是否与引用方的预期一致？
-2. 是否存在"两个文件本应保持同步的数据"（如声明"必须逐字一致"的镜像文件）实际内容不一致？
-3. 跨文件的编号/字段引用（如"步骤3"、"字段X"）在被引用的文件里编号/命名是否真的对得上？`,
-
-  unclassified: '',
+interface ChecklistItem {
+  id: string
+  question: string
 }
 
-/** 根据画像识别出的 structural_patterns，拼出这份文档该用哪些分型清单去对照检查。unclassified或空数组时返回null，完全依赖通用视角库兜底，不强行套清单。 */
-export function buildStructuralChecklistPrompt(patterns: string[] | undefined): string | null {
-  if (!patterns || patterns.length === 0) return null
+const CHECKLISTS: Record<StructuralPattern, ChecklistItem[]> = {
+  gate_rules: [
+    { id: 'gate_1', question: '在note里逐一列出文档全部文件中出现的每个"判死/否决/不成立/拦截"类判定动作的原文片段+它对应的具体判定标准所在位置，一对一对应列表。不允许只用一句"都有对应定义"概括——必须逐条列出具体判定动作是什么、它的定义在哪里。若某一条判定动作找不到定义，必须在issues里报出found issue。' },
+    { id: 'gate_2', question: '重点检查(这一条最容易遭敷衍行开小差)：先在note里逐个列出SKILL.md和references/下每一个md文件的文件名，确认都检查到了。然后逐文件写明：该文件自己的自检清单(如果有)共几条、每条编号内容是什么、其判定逻辑能否在同文件正文其他位置找到对应定义段落。严禁局限在只检查其中一个文件(如只检查compose.md却略过distill.md/critique.md)，这正是此前bug就地义。额外注意：自检条目引用的判定标准即使能找到对应段落，也要核对该段落的判定条件本身是否完整——有没有"看起来有定义，但定义比自检条目暗示的宽松/简化"这种被削弱型缺陷（比如自检说要判断三层情绪，但对应段落只定义了三层的名称却删掉了额外的严格判据）。' },
+    { id: 'gate_3', question: '判死类规则的判定条件是否完整、可操作（不是"表情不对判死"这种模糊表述）？逐一列出你检查过的判死规则名称。' },
+  ],
+  numbered_checklist: [
+    { id: 'checklist_1', question: '重点(与gate_2同样容易遭敷衍，必须逐文件处理)：先在note里列出全文共有哪些文件含有自己的编号自检清单/输出前检查清单（不要遗漏任何一个文件）。对其中每一份清单，逐条编号确认其对应的判定逻辑/标准在同文件正文里是否存在，若找不到必须在issues里报出。' },
+    { id: 'checklist_2', question: '每个文件自己的清单条目之间的编号是否连续、有没有跳号（跳号可能是删除后遗留的痕迹）？逐文件检查。' },
+    { id: 'checklist_3', question: '清单里是否有条目内容本身就是模糊表述（缺乏可操作标准），无法真正执行核查？' },
+  ],
+  multi_step_pipeline: [
+    { id: 'pipeline_1', question: '每个步骤声明的核心约束/硬性要求，是否都有具体的判定标准，而不只是提醒性文字？逐个步骤列出其核心约束，并判断是否有具体标准。' },
+    { id: 'pipeline_2', question: '步骤之间是否存在"某步骤依赖前置步骤产出某个字段/某个判定结果"，但该字段/判定结果在前置步骤定义里找不到对应产出说明？' },
+    { id: 'pipeline_3', question: '流水线的退回/重试/异常处理逻辑，是否覆盖了所有步骤？' },
+  ],
+  enum_or_forbidden_list: [
+    { id: 'enum_1', question: '禁用词/禁用行为清单本身是否完整（结合document_purpose和上下文，是否有明显应该被禁用但清单里没有的高风险项）？' },
+    { id: 'enum_2', question: '重点(必须逐项列不能概括)：先在note里逐项列出文档中所有"禁用词/禁用行为清单"本体的完整内容（一项一项拆开写，不能写"包含禁用词汇"这种概括）。然后搜索全文中任何提及"禁用词/禁用清单/no/not/avoid"等字样的地方——不只是自检清单，还包括测试用例、回归case、验证说明、注释里提到的具体词表，逐项比对这些引用处提到的词与禁用清单本体是否字面对得上。这是删除型缺陷的典型信号：某处(哪怕是测试用例里)提到某禁用项，但该项在禁用清单本体里已经不存在。' },
+    { id: 'enum_3', question: '枚举取值范围是否与文档其他地方引用该枚举字段时的实际用法一致？' },
+  ],
+  cross_file_reference: [
+    { id: 'crossfile_1', question: '每一处跨文件引用（"见assets/xxx"、"依据某表"、"由某配置决定"），被引用的目标文件/字段/表项是否真实存在，内容是否与引用方的预期一致？' },
+    { id: 'crossfile_2', question: '是否存在"两个文件本应保持同步的数据"（如声明"必须逐字一致"的镜像文件）实际内容不一致？' },
+    { id: 'crossfile_3', question: '跨文件的编号/字段引用在被引用的文件里编号/命名是否真的对得上？' },
+  ],
+  unclassified: [],
+}
+
+/** 汇总所有适用清单项的id，供schema要求LLM逐一作答时使用 */
+export function collectChecklistIds(patterns: string[] | undefined): string[] {
+  if (!patterns || patterns.length === 0) return []
   const applicable = patterns.filter((p): p is StructuralPattern => p in CHECKLISTS && p !== 'unclassified')
-  if (applicable.length === 0) return null
+  return applicable.flatMap((p) => CHECKLISTS[p].map((item) => item.id))
+}
 
-  const sections = applicable.map((pattern, i) => `${i + 1}. ${CHECKLISTS[pattern]}`)
-  return `文档画像识别出以下结构形态，请在审查"该有却缺失"类问题（尤其是删除型语义缺陷）时，主动用下面对应的核对清单去对照检查，而不是只等文档自己暴露显式错误——删除型缺陷不留文本痕迹，必须主动对照标准结构去发现缺失：
+/**
+ * 根据画像识别出的 structural_patterns，拼出这份文档该用哪些分型清单去对照检查。
+ * unclassified或空数组时返回null，完全依赖通用视角库兜底，不强行套清单。
+ * v2：每条清单项带唯一id，并要求输出中必须对每个id显式给出checklist_findings结论，强制执行而非自由参考。
+ */
+export function buildStructuralChecklistPrompt(patterns: string[] | undefined): string | null {
+  const ids = collectChecklistIds(patterns)
+  if (ids.length === 0) return null
 
-${sections.join('\n\n')}
+  const applicable = (patterns ?? []).filter((p): p is StructuralPattern => p in CHECKLISTS && p !== 'unclassified')
+  const allItems = applicable.flatMap((p) => CHECKLISTS[p])
+  const lines = allItems.map((item) => `- [${item.id}] ${item.question}`)
 
-这些清单是辅助排查方向，不是自动判found的依据——每一条疑点仍必须在target_sp原文中找到具体证据支撑才能报告，不能凭清单条目本身就下结论。`
+  return `文档画像识别出该文档具有以下结构形态，你必须在输出的checklist_findings字段中，对下面列出的每一个id都给出一条独立的排查结论（found_issue: true/false + note简述理由），不允许遗漏任何一个id，也不允许只笼统给一条总结——这是强制逐项排查删除型缺陷的机制，删除型缺陷不留文本痕迹，只有逐项主动核对才能发现：
+
+${lines.join('\n')}
+
+排查方法：逐个id仔细重读target_sp全文相关部分，明确回答"是/否发现问题"。若found_issue为true，必须同时在issues数组里生成一条对应的found issue（带原文位置证据）；若为false，仅在checklist_findings里记录note即可，不用生成issue。`
 }

@@ -23,7 +23,7 @@ import { formatDocumentProfileForPrompt } from './documentProfiler'
 import { issueGroupLooksSimilar } from './issueSimilarity'
 import { normalizeStrictIssue, type RawIssueCandidate } from './issueValidation'
 import { buildPackageManifest } from './packageManifest'
-import { buildStructuralChecklistPrompt } from './structuralChecklist'
+import { buildStructuralChecklistPrompt, collectChecklistIds } from './structuralChecklist'
 
 function emptyPrescription(overallAssessment = '复核完毕，未生成额外综合处方。'): ReviewPrescription {
   return {
@@ -45,6 +45,8 @@ const EMPTY_RESULT: ReviewConsolidationResult = {
 
 interface UnknownIssueList {
   issues?: unknown
+  /** S5分型清单 v2：强制B1对每个适用清单id给出独立排查结论，防止清单被忽略 */
+  checklist_findings?: unknown
 }
 
 interface UnknownB2Result {
@@ -302,6 +304,7 @@ export async function runConsolidationReview(params: {
   try {
     const adapter = getProviderAdapter(params.model.provider)
     const b1SchemaName = 'IndependentIssueList'
+    const requiredChecklistIds = collectChecklistIds(params.documentProfile.structural_patterns)
     const b1Result = await retryWithErrorFeedback({
       adapter,
       request: {
@@ -318,6 +321,19 @@ export async function runConsolidationReview(params: {
       validate: (raw) => {
         const parsed = parseJsonObject<UnknownIssueList>(raw)
         if (!Array.isArray(parsed.issues)) throw new Error('缺少 issues 数组')
+        // S5分型清单 v2：强制校验 checklist_findings 必须覆盖所有适用清单id，不允许遗漏（遗漏就触发重试带错误反馈重新作答）
+        if (requiredChecklistIds.length > 0) {
+          const findings = (parsed as UnknownIssueList & { checklist_findings?: unknown }).checklist_findings
+          const coveredIds = new Set(
+            Array.isArray(findings)
+              ? findings.filter((f): f is { id: string } => Boolean(f) && typeof (f as { id?: unknown }).id === 'string').map((f) => f.id)
+              : [],
+          )
+          const missing = requiredChecklistIds.filter((id) => !coveredIds.has(id))
+          if (missing.length > 0) {
+            throw new Error(`checklist_findings 未覆盖以下id，必须对每个id都输出一条独立排查结论：${missing.join(', ')}`)
+          }
+        }
       },
     })
     const b1RawOutputs = buildConsolidationRawOutputs({
