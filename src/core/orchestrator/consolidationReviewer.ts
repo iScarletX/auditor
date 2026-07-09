@@ -23,6 +23,7 @@ import { formatDocumentProfileForPrompt } from './documentProfiler'
 import { issueGroupLooksSimilar } from './issueSimilarity'
 import { normalizeStrictIssue, type RawIssueCandidate } from './issueValidation'
 import { buildPackageManifest } from './packageManifest'
+import { buildStructuralChecklistPrompt } from './structuralChecklist'
 
 function emptyPrescription(overallAssessment = '复核完毕，未生成额外综合处方。'): ReviewPrescription {
   return {
@@ -247,7 +248,9 @@ export function buildConsolidationB1Prompt(targetSp: string, documentProfile?: D
   const profileBlock = documentProfile ? `${formatDocumentProfileForPrompt(documentProfile)}\n\n` : ''
   const manifest = buildPackageManifest(targetSp)
   const manifestBlock = manifest ? `<package_manifest>\n${manifest}\n</package_manifest>\n\n` : ''
-  return `${profileBlock}${manifestBlock}<target_sp>
+  const checklist = buildStructuralChecklistPrompt(documentProfile?.structural_patterns)
+  const checklistBlock = checklist ? `<structural_checklist>\n${checklist}\n</structural_checklist>\n\n` : ''
+  return `${profileBlock}${manifestBlock}${checklistBlock}<target_sp>
 ${targetSp}
 </target_sp>`
 }
@@ -261,9 +264,11 @@ function buildB2Prompt(params: {
 }) {
   const manifest = buildPackageManifest(params.targetSp)
   const manifestBlock = manifest ? `<package_manifest>\n${manifest}\n</package_manifest>\n\n` : ''
+  const checklist = buildStructuralChecklistPrompt(params.documentProfile.structural_patterns)
+  const checklistBlock = checklist ? `<structural_checklist>\n${checklist}\n</structural_checklist>\n\n` : ''
   return `${formatDocumentProfileForPrompt(params.documentProfile)}
 
-${manifestBlock}<target_sp>
+${manifestBlock}${checklistBlock}<target_sp>
 ${params.targetSp}
 </target_sp>
 

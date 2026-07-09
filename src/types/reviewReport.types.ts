@@ -166,6 +166,18 @@ export interface ConsolidationSynthesisResult {
   member_issue_ids?: string[]
 }
 
+/**
+ * S5分型清单：结构形态分类(不是业务分类)。写死的是“这份文档展现出哪种结构形态”，不是“这是封面生成/分镜生成”这类具体业务，
+ * 因此新业务类型不会掉入“分型清单无需液写就不能用”的坑。一份文档可同时命中多个形态。
+ */
+export type StructuralPattern =
+  | 'gate_rules' // 含"判死/否决/拦截/不成立"类硬门槛规则
+  | 'numbered_checklist' // 含编号自检清单/输出前检查清单
+  | 'multi_step_pipeline' // 含多步骤流水线/状态机/分工序步骤
+  | 'enum_or_forbidden_list' // 含枚举取值范围/禁用词迟清单
+  | 'cross_file_reference' // 含对其他文件/数据表/配置的引用依赖
+  | 'unclassified' // 无明显结构形态特征，不适用任何分型清单，完全靠通用视角库兑底
+
 export interface DocumentProfile {
   document_purpose: string
   output_consumer: string
@@ -173,6 +185,8 @@ export interface DocumentProfile {
   internal_conventions: string[]
   interaction_mode: InteractionMode
   confidence_note: string
+  /** S5分型清单：识别到的结构形态(可多选，也可为空数组)，驱动L3语义层对照对应结构要素清单徒刷“该有却缺的东西” */
+  structural_patterns?: StructuralPattern[]
 }
 
 export interface PrescriptionPriorityAction {
