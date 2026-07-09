@@ -148,7 +148,7 @@ function buildReportMarkdown(report: ReviewReport, targetSp: string) {
             ? `\n   建议改法（${plan.apply_mode === 'group' ? '需整组应用' : '每处可单独应用'}）：\n${plan.edits.map((edit) => `   - 改前：${edit.before_text.slice(0, 80)}\n     改后：${edit.after_text.slice(0, 80)}\n     说明：${edit.note}`).join('\n')}`
             : `\n   修复说明：${plan.no_fix_reason ?? '需要业务决策，无法给出文字级修复。'}`
           : ''
-        return `${action.priority}. **${action.action_summary}** ${nature}${relation}\n   原因：${action.why}${grouping}${fixText}`
+        return `${action.priority}. **${action.problem_statement}** ${nature}${relation}\n   应对思路：${action.action_summary}\n   优先处理理由：${action.why}${grouping}${fixText}`
       }).join('\n\n')
     : '没有需要处理的问题。'
 
@@ -315,8 +315,8 @@ function App() {
       setError('请至少选择一个审查项。')
       return
     }
-    if (selectedSkillsNeedModel && selectedModelCount < 2) {
-      setError('包含语义判断的审查需要选择 2-3 个检查官模型。')
+    if (selectedSkillsNeedModel && selectedModelCount < 1) {
+      setError('包含语义判断的审查需要选择至少 1 个检查官模型。')
       return
     }
 

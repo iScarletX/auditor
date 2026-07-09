@@ -262,8 +262,8 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
   if (!params.apiKey || models.length < 1) {
     throw new Error('文档画像阶段需要先保存 API Key，并至少选择 1 个模型。')
   }
-  if (needsModel && models.length < 2) {
-    throw new Error('所选 Skill 包含 LLM 判断项，请选择 2-3 个检查官模型。')
+  if (needsModel && models.length < 1) {
+    throw new Error('所选 Skill 包含 LLM 判断项，请选择至少 1 个检查官模型。')
   }
 
   const consolidationSelection = selectConsolidationModel({

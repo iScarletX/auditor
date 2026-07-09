@@ -29,6 +29,9 @@ export function ConsolidationModelPicker({ models, value, onChange }: Consolidat
 
       {open ? (
         <div className="mt-3 space-y-2">
+          <p className="text-xs leading-5 text-slate-500">
+            检查跑完后，该模型负责独立复核、补充遗漏的问题、合并重复项，并生成最终处方。默认从已选的检查官模型中自动选取，也可手动指定。
+          </p>
           <FieldLabel>手动指定</FieldLabel>
           <select
             value={value ?? ''}

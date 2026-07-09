@@ -411,6 +411,7 @@
       "type": "object",
       "required": [
         "priority",
+        "problem_statement",
         "action_summary",
         "why",
         "related_issue_ids",
@@ -421,6 +422,10 @@
         "priority": {
           "type": "integer",
           "minimum": 1
+        },
+        "problem_statement": {
+          "type": "string",
+          "minLength": 1
         },
         "action_summary": {
           "type": "string",

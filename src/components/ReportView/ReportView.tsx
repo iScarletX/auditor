@@ -116,7 +116,10 @@ interface ProblemPosition {
 interface BigProblem {
   key: string
   actionPriority: number | null
+  /** 列表行标题：问题现象本身(problem_statement)，不是改法 */
   title: string
+  /** 详情页里“建议改法”部分(原 action_summary)，与 title 分开展示，不在列表行里重复 */
+  actionSummary: string
   why: string
   nature?: string
   groupingLogic?: string
@@ -179,7 +182,8 @@ function buildBigProblems(report: ReviewReport, locator: Locator) {
     problems.push({
       key: `action-${action.priority}`,
       actionPriority: action.priority,
-      title: action.action_summary,
+      title: action.problem_statement,
+      actionSummary: action.action_summary,
       why: action.why,
       nature: action.nature,
       groupingLogic: action.grouping_logic,
@@ -202,7 +206,9 @@ function buildBigProblems(report: ReviewReport, locator: Locator) {
     problems.push({
       key: `uncovered-${issue.id}`,
       actionPriority: null,
+      // 兼底条没有经过B2汇总，本身issue.title就是具体发现，直接当现象标题用；actionSummary无来源且本身就是未经整理的单条发现，不需额外提供改法说明
       title: issue.title,
+      actionSummary: '',
       why: issue.description.split('\n')[0],
       severity: issue.severity_display,
       relatedIssues: [issue],
@@ -424,7 +430,6 @@ function ProblemDetail({
                     </Badge>
                   ) : null}
                 </div>
-                <p className="mt-2 text-sm leading-6 text-slate-700">{problem.why}</p>
                 {problem.groupingLogic ? (
                   <p className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-600">
                     <span className="font-medium text-slate-800">为什么这几处是同一个问题：</span>
@@ -438,11 +443,28 @@ function ProblemDetail({
             </div>
           </div>
 
+          {/* 建议改法 + 优先处理理由：现象(上方title)之后才是应对措施，不能把两者混在一起 */}
+          {problem.actionSummary || problem.why ? (
+            <div className="border-b border-slate-200 px-6 py-4">
+              {problem.actionSummary ? (
+                <p className="text-sm leading-6 text-slate-800">
+                  <span className="font-medium text-slate-950">应对思路：</span>
+                  {problem.actionSummary}
+                </p>
+              ) : null}
+              {problem.why ? (
+                <p className={cn('text-xs leading-5 text-slate-500', problem.actionSummary ? 'mt-1.5' : '')}>
+                  {problem.why}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
           {/* 修复方案 */}
           {fixPlan ? (
             <div className="border-b border-slate-200 px-6 py-4">
               <h3 className="text-sm font-semibold text-slate-950">
-                建议改法
+                具体修改
                 {isGroupFix ? (
                   <span className="ml-2 text-xs font-normal text-purple-700">
                     以下 {fixPlan.edits.length} 处必须作为一组应用
@@ -820,18 +842,18 @@ export function ReportView({
               <div className="mt-3">
                 <button
                   type="button"
-                  className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-800"
+                  className="flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-slate-600"
                   onClick={() => setShowSkipped((value) => !value)}
                 >
-                  <ListChecks className="h-3.5 w-3.5" />
+                  <ListChecks className="h-3 w-3" />
                   {skippedChecks.length} 项检查判断为不适用，未执行
                   {showSkipped ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
                 </button>
                 {showSkipped ? (
-                  <ul className="mt-2 space-y-1 text-xs leading-5 text-slate-600">
+                  <ul className="mt-1.5 space-y-1 text-[11px] leading-5 text-slate-500">
                     {skippedChecks.map((entry) => (
                       <li key={entry.skill_id}>
-                        <span className="font-medium text-slate-800">{entry.skill_title}</span>：{entry.reason}
+                        <span className="font-medium text-slate-600">{entry.skill_title}</span>：{entry.reason}
                       </li>
                     ))}
                   </ul>

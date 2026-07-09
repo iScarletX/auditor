@@ -122,6 +122,8 @@ function normalizePriorityActions(value: unknown): PrescriptionPriorityAction[] 
         : undefined
       return {
         priority: Number.isFinite(priority) && priority >= 1 ? Math.round(priority) : index + 1,
+        // 兼容旧数据/模型偶尔漏填：若problem_statement缺失，降级以action_summary充当（仍要好于完全没有），不因为旧字段缺失就丢掉整条
+        problem_statement: normalizeString(candidate.problem_statement) || normalizeString(candidate.action_summary),
         action_summary: normalizeString(candidate.action_summary),
         why: normalizeString(candidate.why),
         related_issue_ids: normalizeStringArray(candidate.related_issue_ids),

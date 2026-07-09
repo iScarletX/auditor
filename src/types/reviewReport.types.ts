@@ -191,6 +191,8 @@ export interface DocumentProfile {
 
 export interface PrescriptionPriorityAction {
   priority: number
+  /** 问题现象本身：当前是什么样子、哪里不对、会导致什么后果——用户看报告时先看到“问题是什么”，必须与action_summary(改法)区分开 */
+  problem_statement: string
   action_summary: string
   why: string
   related_issue_ids: string[]

@@ -20,10 +20,6 @@ export function SummaryPanel({ report, selectedSkills, selectedModelCount, targe
   }, [targetSp, selectedSkills])
 
   const nonStaticSkillCount = plannedSkills.filter((skill) => skill.execution_mode !== 'static_check').length
-  const consolidationCalls = selectedModelCount >= 1 ? 3 : 0
-  const estimatedCalls = nonStaticSkillCount * selectedModelCount + consolidationCalls
-  const estimatedTokens = estimatedCalls * 3000
-  const estimatedMinutes = Math.max(1, Math.ceil(estimatedCalls / 6))
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4">
@@ -34,12 +30,6 @@ export function SummaryPanel({ report, selectedSkills, selectedModelCount, targe
       <div className="flex flex-wrap gap-2">
         <Badge>实际执行 {nonStaticSkillCount} 项</Badge>
         <Badge>检查官 {selectedModelCount}</Badge>
-        <Badge>约 {estimatedCalls} 次请求</Badge>
-        <Badge>约 {estimatedMinutes} 分钟</Badge>
-        <Badge>约 {estimatedTokens.toLocaleString()} tokens</Badge>
-      </div>
-      <div className="mt-3 text-xs leading-5 text-slate-500">
-        预估基于智能模式裁剪后的真实执行数量，已包含文档画像、独立复核和最终把关调用。
       </div>
       {report ? (
         <div className="mt-3 text-xs leading-5 text-slate-500">

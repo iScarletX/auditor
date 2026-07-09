@@ -65,13 +65,13 @@ export function ReviewStatusPanel({
       <section className="rounded-lg border border-slate-200 bg-white p-5">
         <div className="mb-4 flex items-center gap-2">
           <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
-          <h2 className="text-sm font-semibold text-slate-950">{latest?.label ?? '正在审查'}</h2>
+          <h2 className="text-sm font-semibold text-slate-950">正在审查</h2>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-slate-100">
           <div className="h-full bg-emerald-500 transition-all" style={{ width: `${percent}%` }} />
         </div>
         <div className="mt-3 text-xs text-slate-500">
-          {completed}/{total} · 已发现 {latest?.foundCount ?? 0} 个候选问题
+          已发现 {latest?.foundCount ?? 0} 个候选问题
         </div>
         {errors.length > 0 ? (
           <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -144,27 +144,25 @@ export function ReviewStatusPanel({
             </div>
           </div>
           {skippedChecks.length > 0 ? (
-            <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+            <div className="mt-3">
               <button
                 type="button"
-                className="flex w-full items-center gap-2 text-left"
+                className="flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-slate-600"
                 onClick={() => setShowSkipped((value) => !value)}
               >
-                <ListChecks className="h-3.5 w-3.5 text-slate-500" />
-                <span className="flex-1 text-xs text-slate-600">
-                  根据文档类型，部分检查项判断为不适用，本次未执行
-                </span>
+                <ListChecks className="h-3 w-3" />
+                {skippedChecks.length} 项检查判断为不适用，未执行
                 {showSkipped ? (
-                  <ChevronDown className="h-3.5 w-3.5 text-slate-500" />
+                  <ChevronDown className="h-3 w-3" />
                 ) : (
-                  <ChevronRight className="h-3.5 w-3.5 text-slate-500" />
+                  <ChevronRight className="h-3 w-3" />
                 )}
               </button>
               {showSkipped ? (
-                <ul className="mt-2 space-y-1.5">
+                <ul className="mt-1.5 space-y-1">
                   {skippedChecks.map((entry) => (
-                    <li key={entry.skill_id} className="text-xs leading-5 text-slate-600">
-                      <span className="font-medium text-slate-800">{entry.skill_title}</span>：{entry.reason}
+                    <li key={entry.skill_id} className="text-[11px] leading-5 text-slate-500">
+                      <span className="font-medium text-slate-600">{entry.skill_title}</span>：{entry.reason}
                     </li>
                   ))}
                 </ul>
@@ -243,7 +241,7 @@ export function ReviewStatusPanel({
               sortedPriorityActions.map((action) => {
                 const expanded = action.priority === expandedActionPriority
                 return (
-                  <article key={`${action.priority}-${action.action_summary}`} className="rounded-lg border border-slate-200">
+                  <article key={`${action.priority}-${action.problem_statement}`} className="rounded-lg border border-slate-200">
                     <button
                       type="button"
                       className="flex w-full items-start gap-3 px-4 py-3 text-left transition hover:bg-slate-50"
@@ -253,8 +251,11 @@ export function ReviewStatusPanel({
                         {action.priority}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <h3 className="text-sm font-semibold leading-6 text-slate-950">{action.action_summary}</h3>
-                        <p className="mt-1 text-xs leading-5 text-slate-600">{action.why}</p>
+                        <h3 className="text-sm font-semibold leading-6 text-slate-950">{action.problem_statement}</h3>
+                        <p className="mt-1 text-xs leading-5 text-slate-600">
+                          <span className="font-medium text-slate-700">应对思路：</span>{action.action_summary}
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-slate-500">{action.why}</p>
                         {action.conflicts_resolved ? (
                           <p className="mt-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900">
                             {action.conflicts_resolved}

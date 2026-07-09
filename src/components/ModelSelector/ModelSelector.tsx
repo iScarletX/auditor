@@ -1,4 +1,4 @@
-import { KeyRound, Plus } from 'lucide-react'
+import { KeyRound, Plus, Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { ModelConfig } from '../../types/reviewReport.types'
 import { DEFAULT_MODELS, listOpenRouterModels } from '../../core/modelProvider/providerAdapter'
@@ -43,6 +43,7 @@ export function ModelSelector({
   const [customLabel, setCustomLabel] = useState('')
   const [customBaseUrl, setCustomBaseUrl] = useState('')
   const [customModelId, setCustomModelId] = useState('')
+  const [modelSearch, setModelSearch] = useState('')
   const selectedModels = models.filter((model) => model.selected).slice(0, 3)
   const selectedKeys = new Set(selectedModels.map((model) => `${model.provider}:${model.baseUrl}:${model.modelId}`))
   const selectedCount = selectedModels.length
@@ -54,6 +55,13 @@ export function ModelSelector({
     ]),
     [availableModels, selectedModels],
   )
+  const filteredModelChoices = useMemo(() => {
+    const keyword = modelSearch.trim().toLowerCase()
+    if (!keyword) return modelChoices
+    return modelChoices.filter(
+      (model) => model.label.toLowerCase().includes(keyword) || model.modelId.toLowerCase().includes(keyword),
+    )
+  }, [modelChoices, modelSearch])
 
   const refreshModels = async (apiKey: string | null) => {
     if (!apiKey) {
@@ -173,19 +181,29 @@ export function ModelSelector({
           )}
         </div>
 
-        {selectedCount < 2 ? (
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            语义审查需要选择 2-3 个检查官模型；静态检查可不调用模型。
-          </div>
-        ) : null}
-
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <FieldLabel>检查官模型</FieldLabel>
             <span className="text-xs text-slate-500">{selectedCount}/3</span>
           </div>
+          <p className="text-xs leading-5 text-slate-500">
+            检查官模型负责执行语义类审查项。可选 1–3 个：1 个速度最快但无交叉验证，判断仅作参考；2–3 个可相互比对，仅当多个模型一致时才确认为确定问题，可靠度更高。
+          </p>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={modelSearch}
+              onChange={(event) => setModelSearch(event.target.value)}
+              placeholder="搜索模型名称或id"
+              className="h-8 w-full rounded-md border border-slate-300 bg-white pl-8 pr-3 text-xs text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+            />
+          </div>
           <div className="max-h-56 space-y-2 overflow-auto rounded-md border border-slate-200 p-2">
-            {modelChoices.map((model) => {
+            {filteredModelChoices.length === 0 ? (
+              <p className="px-2 py-3 text-center text-xs text-slate-400">没有匹配的模型</p>
+            ) : null}
+            {filteredModelChoices.map((model) => {
               const key = `${model.provider}:${model.baseUrl}:${model.modelId}`
               const checked = selectedKeys.has(key)
               const disabled = !checked && selectedCount >= 3
