@@ -30,6 +30,8 @@ export interface RunReviewParams {
   apiKey: string | null
   reviewId?: string
   manualConsolidationModelId?: string | null
+  /** 最终把关模型可手动指定为任意模型，不局限于已选的检查官；此处传入完整可用模型池作为查找来源 */
+  manualConsolidationModelCandidates?: ModelConfig[]
   onProgress?: (event: ReviewProgressEvent) => void
   signal?: AbortSignal
 }
@@ -269,6 +271,7 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
   const consolidationSelection = selectConsolidationModel({
     selectedModels: models,
     manualModelId: params.manualConsolidationModelId,
+    manualModelCandidates: params.manualConsolidationModelCandidates,
   })
   const profileModel = consolidationSelection.model ?? models[0]
   if (!profileModel) {

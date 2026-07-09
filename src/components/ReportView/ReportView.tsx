@@ -5,7 +5,6 @@ import {
   ChevronRight,
   Download,
   FileSearch,
-  ListChecks,
   Pencil,
   RotateCcw,
   X,
@@ -291,6 +290,7 @@ function ProblemDetail({
   const [expandedLine, setExpandedLine] = useState<number | null>(null)
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [showRawData, setShowRawData] = useState(false)
+  const [showMeta, setShowMeta] = useState(false)
 
   const fixPlan = problem.actionPriority !== null
     ? (report.fix_plans ?? []).find((plan) => plan.action_priority === problem.actionPriority)
@@ -410,13 +410,12 @@ function ProblemDetail({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="overflow-y-auto">
-          {/* 问题说明 */}
+          {/* 问题说明：第一眼必须看到完整现象(problem.title现已要求包含现象+影响+后果三层)，其他元信息全部收进折叠区 */}
           <div className="border-b border-slate-200 px-6 py-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={cn('h-3 w-3 rounded-full', severityDot[problem.severity])} />
-                  <h2 className="text-base font-semibold text-slate-950">{problem.title}</h2>
                   {problem.nature ? (
                     <Badge className={NATURE_BADGE[problem.nature]}>{NATURE_LABELS[problem.nature]}</Badge>
                   ) : null}
@@ -430,12 +429,7 @@ function ProblemDetail({
                     </Badge>
                   ) : null}
                 </div>
-                {problem.groupingLogic ? (
-                  <p className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-600">
-                    <span className="font-medium text-slate-800">为什么这几处是同一个问题：</span>
-                    {problem.groupingLogic}
-                  </p>
-                ) : null}
+                <p className="mt-2 text-base leading-7 text-slate-900">{problem.title}</p>
               </div>
               <button type="button" className="rounded p-1 text-slate-400 hover:bg-slate-100" onClick={onClose}>
                 <X className="h-5 w-5" />
@@ -443,19 +437,37 @@ function ProblemDetail({
             </div>
           </div>
 
-          {/* 建议改法 + 优先处理理由：现象(上方title)之后才是应对措施，不能把两者混在一起 */}
-          {problem.actionSummary || problem.why ? (
+          {/* 应对思路：看完现象后紧接的“所以建议怎么改”，保留在主体信息里(不归入折叠)，因为这是用户真正关心的行动建议 */}
+          {problem.actionSummary ? (
             <div className="border-b border-slate-200 px-6 py-4">
-              {problem.actionSummary ? (
-                <p className="text-sm leading-6 text-slate-800">
-                  <span className="font-medium text-slate-950">应对思路：</span>
-                  {problem.actionSummary}
-                </p>
-              ) : null}
-              {problem.why ? (
-                <p className={cn('text-xs leading-5 text-slate-500', problem.actionSummary ? 'mt-1.5' : '')}>
-                  {problem.why}
-                </p>
+              <p className="text-sm leading-6 text-slate-800">
+                <span className="font-medium text-slate-950">应对思路：</span>
+                {problem.actionSummary}
+              </p>
+            </div>
+          ) : null}
+
+          {/* 折叠的补充信息：为什么这几处合并+优先处理理由，都是“元信息”，默认收起，不抢占阅读第一视觉焦点 */}
+          {problem.groupingLogic || problem.why ? (
+            <div className="border-b border-slate-100 px-6 py-2.5">
+              <button
+                type="button"
+                className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600"
+                onClick={() => setShowMeta((value) => !value)}
+              >
+                {showMeta ? '收起' : '查看'}判定依据
+                {showMeta ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              </button>
+              {showMeta ? (
+                <div className="mt-2 space-y-1.5">
+                  {problem.groupingLogic ? (
+                    <p className="rounded-md bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+                      <span className="font-medium text-slate-700">为什么这几处是同一个问题：</span>
+                      {problem.groupingLogic}
+                    </p>
+                  ) : null}
+                  {problem.why ? <p className="text-xs leading-5 text-slate-500">{problem.why}</p> : null}
+                </div>
               ) : null}
             </div>
           ) : null}
@@ -658,7 +670,6 @@ export function ReportView({
   )
 
   const [detailKey, setDetailKey] = useState<string | null>(null)
-  const [showSkipped, setShowSkipped] = useState(false)
   const [showReference, setShowReference] = useState(false)
   const [showFullDoc, setShowFullDoc] = useState(false)
   const [showScoreDetail, setShowScoreDetail] = useState(false)
@@ -761,7 +772,6 @@ export function ReportView({
 
   const profile = report.document_profile
   const checkPlan = report.check_plan ?? []
-  const skippedChecks = checkPlan.filter((entry) => entry.decision === 'skip')
   const ranCheckCount = checkPlan.filter((entry) => entry.decision === 'run').length || report.meta.skills_run.length
   const detailProblem = problems.find((problem) => problem.key === detailKey) ?? null
   const minorNotes = report.prescription.minor_notes
@@ -837,28 +847,6 @@ export function ReportView({
                 <span className="font-medium text-amber-700">待改进：</span>
                 {score.weaknesses.join('、')}
               </p>
-            ) : null}
-            {skippedChecks.length > 0 ? (
-              <div className="mt-3">
-                <button
-                  type="button"
-                  className="flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-slate-600"
-                  onClick={() => setShowSkipped((value) => !value)}
-                >
-                  <ListChecks className="h-3 w-3" />
-                  {skippedChecks.length} 项检查判断为不适用，未执行
-                  {showSkipped ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                </button>
-                {showSkipped ? (
-                  <ul className="mt-1.5 space-y-1 text-[11px] leading-5 text-slate-500">
-                    {skippedChecks.map((entry) => (
-                      <li key={entry.skill_id}>
-                        <span className="font-medium text-slate-600">{entry.skill_title}</span>：{entry.reason}
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
             ) : null}
             <button
               type="button"
@@ -1119,6 +1107,7 @@ export function ReportView({
 
       {detailProblem ? (
         <ProblemDetail
+          key={detailProblem.key}
           problem={detailProblem}
           report={report}
           locator={locator}

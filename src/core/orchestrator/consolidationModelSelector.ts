@@ -20,13 +20,17 @@ function rankOf(modelId: string) {
 export function selectConsolidationModel(params: {
   selectedModels: ModelConfig[]
   manualModelId?: string | null
+  /** 手动指定的模型可能不在selectedModels(检查官列表)里--用户可以从完整可用模型池里自由指定，
+   * 不再局限于已选的几个。传入完整候选池作为兼底查找来源。 */
+  manualModelCandidates?: ModelConfig[]
 }): {
   model: ModelConfig | null
   source: 'auto_selected' | 'user_specified'
 } {
   const selected = params.selectedModels.filter((model) => model.selected)
+  const manualPool = [...selected, ...(params.manualModelCandidates ?? [])]
   const manual = params.manualModelId
-    ? selected.find((model) => model.id === params.manualModelId || model.modelId === params.manualModelId)
+    ? manualPool.find((model) => model.id === params.manualModelId || model.modelId === params.manualModelId)
     : null
 
   if (manual) {

@@ -9,11 +9,10 @@ import { PromptInput } from './components/PromptInput/PromptInput'
 import { ReviewStatusPanel } from './components/ReviewStatusPanel/ReviewStatusPanel'
 import { ScenarioHintInput } from './components/ScenarioHintInput/ScenarioHintInput'
 import { SkillSelector } from './components/SkillSelector/SkillSelector'
-import { SummaryPanel } from './components/SummaryPanel/SummaryPanel'
 import { Button } from './components/ui/Button'
 import { applyFix } from './core/fixApplier/applyFix'
 import { generateDiff, type DiffResult } from './core/fixApplier/generateDiff'
-import { DEFAULT_MODELS } from './core/modelProvider/providerAdapter'
+import { DEFAULT_MODELS, listOpenRouterModels } from './core/modelProvider/providerAdapter'
 import { runReview } from './core/orchestrator/runReview'
 import { calculateReviewScore } from './core/orchestrator/scoreCalculator'
 import { loadBuiltinSkills } from './core/skillLoader/loadBuiltinSkills'
@@ -206,6 +205,11 @@ function App() {
   const [manualConsolidationModelId, setManualConsolidationModelId] = useState<string | null>(null)
   const [hasApiKey, setHasApiKey] = useState(() => hasStoredEncryptedApiKey())
   const [apiKeyMask, setApiKeyMask] = useState(() => getStoredApiKeyMask())
+  // 检查官模型/最终把关模型共享同一份完整模型列表，打通两处的搜索池，不再各自只能搜到已选的3个
+  const [availableModels, setAvailableModels] = useState<ModelConfig[]>(
+    DEFAULT_MODELS.map((model) => ({ ...model, selected: false })),
+  )
+  const [modelListStatus, setModelListStatus] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [events, setEvents] = useState<ReviewProgressEvent[]>([])
   const [report, setReport] = useState<ReviewReport | null>(null)
@@ -237,6 +241,47 @@ function App() {
   useEffect(() => {
     saveModelPrefs(models)
   }, [models])
+
+  // 页面打开时自动拉取完整模型列表(不用等用户手动点“读取模型”)，没有存过Key时静默降级为默认列表，不报错打断页面
+  useEffect(() => {
+    let cancelled = false
+    async function autoLoadModels() {
+      if (!hasApiKey) return
+      const apiKey = await loadDecryptedApiKey()
+      if (!apiKey || cancelled) return
+      setModelListStatus('正在读取 OpenRouter 模型列表...')
+      try {
+        const fetchedModels = await listOpenRouterModels(apiKey)
+        if (cancelled) return
+        setAvailableModels(fetchedModels)
+        setModelListStatus(`已读取 ${fetchedModels.length.toLocaleString()} 个可用模型`)
+      } catch {
+        if (cancelled) return
+        setModelListStatus('暂时无法读取完整模型列表，已使用默认模型')
+      }
+    }
+    void autoLoadModels()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const refreshAvailableModels = async (apiKey: string | null) => {
+    if (!apiKey) {
+      setModelListStatus('请先保存 OpenRouter API Key')
+      return
+    }
+    setModelListStatus('正在读取 OpenRouter 模型列表...')
+    try {
+      const fetchedModels = await listOpenRouterModels(apiKey)
+      setAvailableModels(fetchedModels)
+      setModelListStatus(`已读取 ${fetchedModels.length.toLocaleString()} 个可用模型`)
+    } catch {
+      setAvailableModels(DEFAULT_MODELS.map((model) => ({ ...model, selected: false })))
+      setModelListStatus('暂时无法读取完整模型列表，已使用默认模型')
+    }
+  }
 
   useEffect(() => {
     void listReviewRecords().then(setHistory)
@@ -333,6 +378,7 @@ function App() {
         selectedSkills,
         selectedModels: models,
         manualConsolidationModelId,
+        manualConsolidationModelCandidates: availableModels,
         apiKey,
         signal: controller.signal,
         onProgress: (event) => {
@@ -582,9 +628,13 @@ function App() {
             apiKeyMask={apiKeyMask}
             onSaveApiKey={handleSaveApiKey}
             onLoadStoredApiKey={loadDecryptedApiKey}
+            availableModels={availableModels}
+            modelListStatus={modelListStatus}
+            onRefreshAvailableModels={refreshAvailableModels}
           />
           <ConsolidationModelPicker
             models={models}
+            availableModels={availableModels}
             value={manualConsolidationModelId}
             onChange={setManualConsolidationModelId}
           />
@@ -594,12 +644,6 @@ function App() {
             recommendedDomainIds={recommendedDomainIds}
             onToggle={toggleSkill}
             onSkillAdded={addUserSkill}
-            targetSp={targetSp}
-          />
-          <SummaryPanel
-            report={report}
-            selectedSkills={selectedSkills}
-            selectedModelCount={selectedModelCount}
             targetSp={targetSp}
           />
           {error ? (
