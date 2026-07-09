@@ -25,7 +25,7 @@ import { normalizeStrictIssue, type RawIssueCandidate } from './issueValidation'
 import { buildPackageManifest } from './packageManifest'
 import { buildStructuralChecklistPrompt, collectChecklistIds } from './structuralChecklist'
 
-function emptyPrescription(overallAssessment = '复核完毕，未生成额外综合处方。'): ReviewPrescription {
+export function emptyPrescription(overallAssessment = '复核完毕，未生成额外综合处方。'): ReviewPrescription {
   return {
     overall_assessment: overallAssessment,
     priority_actions: [],

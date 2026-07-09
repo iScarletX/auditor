@@ -254,6 +254,10 @@ export interface ReviewReport {
     timestamp: string
     review_duration_ms?: number
     scenario_hint: string
+    /** 体验改进：正常完成时不存在；中途失败/用户主动停止时标记为true，并附上进度信息，避免已耗费的耗时/token对应的中间结果被完全丢弃 */
+    degraded?: true
+    degraded_reason?: string
+    degraded_stage?: string
   }
   document_profile: DocumentProfile
   check_plan: CheckPlanReportEntry[]

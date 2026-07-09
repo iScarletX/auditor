@@ -84,6 +84,14 @@ export async function listReviewRecords(): Promise<ReviewHistoryRecord[]> {
   return records.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
+export async function deleteReviewRecord(id: string) {
+  const db = await openButlerDb()
+  const transaction = db.transaction('reviews', 'readwrite')
+  transaction.objectStore('reviews').delete(id)
+  await transactionDone(transaction)
+  db.close()
+}
+
 export async function saveUserSkill(record: UserSkillRecord) {
   const db = await openButlerDb()
   const transaction = db.transaction('userSkills', 'readwrite')

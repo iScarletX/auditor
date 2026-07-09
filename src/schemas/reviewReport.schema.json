@@ -77,6 +77,15 @@
         },
         "scenario_hint": {
           "type": "string"
+        },
+        "degraded": {
+          "const": true
+        },
+        "degraded_reason": {
+          "type": "string"
+        },
+        "degraded_stage": {
+          "type": "string"
         }
       }
     },
@@ -343,6 +352,20 @@
         },
         "confidence_note": {
           "type": "string"
+        },
+        "structural_patterns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "gate_rules",
+              "numbered_checklist",
+              "multi_step_pipeline",
+              "enum_or_forbidden_list",
+              "cross_file_reference",
+              "unclassified"
+            ]
+          }
         }
       }
     },

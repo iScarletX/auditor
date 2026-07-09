@@ -169,6 +169,31 @@ function mergedDescription(skillLabel: string, issues: Issue[]) {
   return `${skillLabel}在以下几处分别存在具体问题：\n${lines.join('\n')}${suffix}`
 }
 
+/**
+ * 体验改进：中断/失败时的降级快照专用——把尚未去重/未经B1B2把关的原始found issue
+ * 各自包装成一条独立 IssueGroup，不做任何合并/去重计算，保证即使中断也能拿到已发现的问题，
+ * 而不是因为还没跑到去重这一步就把已发现的东西丢得一干二净。
+ */
+export function issuesToRawGroups(issues: Issue[]): IssueGroup[] {
+  return issues
+    .filter((issue) => issue.status === 'found')
+    .map((issue, index) => ({
+      id: issue.id || `raw-${index}`,
+      merge_type: 'single' as IssueGroup['merge_type'],
+      title: issue.description.split('\n')[0].slice(0, 60),
+      related_skill_ids: [issue.skill_id],
+      category: issue.category,
+      severity_display: severityDisplay(issue.severity),
+      confidence_display: evidenceConfidence(issue.evidence_type, issue),
+      domain_specific: Boolean(issue.domain_specific),
+      locations: makeLocations([issue]),
+      description: issue.description,
+      raw_model_output_ids: issue.raw_model_output_ids ?? [],
+      ...profileConflictFromIssues([issue]),
+      fix_items: makeFixItems([issue]),
+    }))
+}
+
 function makeFixItems(issues: Issue[]) {
   return issues.map((issue, index) => ({
     marker_index: index + 1,

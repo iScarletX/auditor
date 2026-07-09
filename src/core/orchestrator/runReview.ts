@@ -13,11 +13,11 @@ import type {
 } from '../../types/reviewReport.types'
 import { buildCheckPlan } from './checkPlanner'
 import { selectConsolidationModel } from './consolidationModelSelector'
-import { runConsolidationReview } from './consolidationReviewer'
+import { emptyPrescription, runConsolidationReview } from './consolidationReviewer'
 import { generateFixPlans, strongestConfidenceOf } from './fixPlanGenerator'
 import { runWithConcurrency } from './concurrencyPool'
 import { runDocumentProfile } from './documentProfiler'
-import { deduplicateIssues, mergeConsolidationIntoGroups } from './issueDeduplicator'
+import { deduplicateIssues, issuesToRawGroups, mergeConsolidationIntoGroups } from './issueDeduplicator'
 import { judgeSkillWithModel, type ModelJudgeOutput } from './llmJudgeEngine'
 import { runStaticCheckEngine, type StaticCheckResult } from './staticCheckEngine'
 import { aggregateVotes } from './voteAggregator'
@@ -196,19 +196,72 @@ async function runTask(params: {
   }
 }
 
+/** 审查过程中逐步维护的快照：中途失败/用户主动停止时，拼一份“降级报告”用到的全部已知信息。
+ * 设计原则：只读写，不改变现有控制流——每阶段完成后把已知结果存进去，失败时只能拿到“已完成部分”，
+ * 不强行补齐未完成部分。 */
+interface ReviewSnapshot {
+  reviewId: string
+  startedAt: number
+  scenarioHint: string
+  documentProfile: ReviewReport['document_profile'] | null
+  checkPlanEntries: ReviewReport['check_plan']
+  rawModelOutputs: RawModelOutput[]
+  finalIssues: ReviewReport['issues']
+  incompleteChecks: ReviewReport['incomplete_checks']
+  prescription: ReviewPrescription | null
+  fixPlans: ReviewReport['fix_plans']
+  modelsUsed: string[]
+  expectedSkillModelCalls: number
+  actualSkillModelCalls: number
+  consolidationModelId: string
+  consolidationModelSource: 'auto_selected' | 'user_specified'
+}
+
+function buildDegradedReport(snapshot: ReviewSnapshot, stage: string, reason: string): ReviewReport {
+  const prescription = snapshot.prescription ?? emptyPrescription(`本次审查在“${stage}”阶段中断，以下为已完成部分的结果。`)
+  const report: ReviewReport = {
+    meta: {
+      review_id: snapshot.reviewId,
+      target_sp_hash: '',
+      skills_run: snapshot.checkPlanEntries.filter((entry) => entry.decision === 'run').map((entry) => entry.skill_id),
+      models_used: snapshot.modelsUsed,
+      expected_skill_model_calls: snapshot.expectedSkillModelCalls,
+      actual_skill_model_calls: snapshot.actualSkillModelCalls,
+      consolidation_model: snapshot.consolidationModelId,
+      consolidation_model_source: snapshot.consolidationModelSource,
+      timestamp: new Date().toISOString(),
+      review_duration_ms: Math.round(performance.now() - snapshot.startedAt),
+      scenario_hint: snapshot.scenarioHint,
+      degraded: true,
+      degraded_reason: reason,
+      degraded_stage: stage,
+    },
+    document_profile: snapshot.documentProfile ?? {
+      document_purpose: '未能完成文档画像，无法提供文档理解。',
+      output_consumer: '未知',
+      declared_exclusions: [],
+      internal_conventions: [],
+      interaction_mode: 'unknown',
+      confidence_note: '审查在建立画像阶段就中断，以下结果不完整。',
+    },
+    check_plan: snapshot.checkPlanEntries,
+    prescription,
+    ...(snapshot.fixPlans && snapshot.fixPlans.length > 0 ? { fix_plans: snapshot.fixPlans } : {}),
+    incomplete_checks: snapshot.incompleteChecks,
+    issues: snapshot.finalIssues,
+    raw_model_outputs: snapshot.rawModelOutputs,
+    summary: buildSummary(snapshot.finalIssues),
+  }
+  return JSON.parse(JSON.stringify(report)) as ReviewReport
+}
+
 export async function runReview(params: RunReviewParams): Promise<ReviewReport> {
-  const startedAt = performance.now()
-  const reviewId = params.reviewId ?? crypto.randomUUID()
-  const rawIssues: Issue[] = []
-  const rawModelOutputs: RawModelOutput[] = []
-  const allErrors: string[] = []
   const models = params.selectedModels.filter((model) => model.selected).slice(0, 3)
   const needsModel = params.selectedSkills.some(requiresModel)
 
   if (!params.apiKey || models.length < 1) {
     throw new Error('文档画像阶段需要先保存 API Key，并至少选择 1 个模型。')
   }
-
   if (needsModel && models.length < 2) {
     throw new Error('所选 Skill 包含 LLM 判断项，请选择 2-3 个检查官模型。')
   }
@@ -222,6 +275,50 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
     throw new Error('文档画像阶段找不到可用模型。')
   }
 
+  const snapshot: ReviewSnapshot = {
+    reviewId: params.reviewId ?? crypto.randomUUID(),
+    startedAt: performance.now(),
+    scenarioHint: params.scenarioHint,
+    documentProfile: null,
+    checkPlanEntries: [],
+    rawModelOutputs: [],
+    finalIssues: [],
+    incompleteChecks: [],
+    prescription: null,
+    fixPlans: [],
+    modelsUsed: models.map((model) => model.modelId),
+    expectedSkillModelCalls: 0,
+    actualSkillModelCalls: 0,
+    consolidationModelId: consolidationSelection.model?.modelId ?? '',
+    consolidationModelSource: consolidationSelection.source,
+  }
+
+  try {
+    return await runReviewInternal(params, models, profileModel, consolidationSelection, snapshot)
+  } catch (error) {
+    // 画像都还没建立就失败：连 document_profile 这个必填字段都减没有，没任何可展示的部分结果，只能真报错
+    if (!snapshot.documentProfile) throw error
+    const stage = params.signal?.aborted ? '用户主动停止' : '审查中途失败'
+    const reason = params.signal?.aborted
+      ? '用户主动停止了审查，下方展示的是停止前已完成的部分结果。'
+      : `审查在中途发生错误(${error instanceof Error ? error.message : '未知错误'})，下方展示的是中断前已完成的部分结果。`
+    return buildDegradedReport(snapshot, stage, reason)
+  }
+}
+
+async function runReviewInternal(
+  params: RunReviewParams,
+  models: ModelConfig[],
+  profileModel: ModelConfig,
+  consolidationSelection: ReturnType<typeof selectConsolidationModel>,
+  snapshot: ReviewSnapshot,
+): Promise<ReviewReport> {
+  const startedAt = snapshot.startedAt
+  const reviewId = snapshot.reviewId
+  const rawIssues: Issue[] = []
+  const rawModelOutputs: RawModelOutput[] = []
+  const allErrors: string[] = []
+
   // 任务总数在检查计划之后才能精确；这里先按全部选中项估算，计划裁剪后只会提前完成，不会超出
   const estimatedTaskCount = params.selectedSkills.reduce((sum, skill) => {
     if (skill.execution_mode === 'static_check') return sum + 1
@@ -233,12 +330,14 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
   const profileResult = await runDocumentProfile({
     targetSp: params.targetSp,
     model: profileModel,
-    apiKey: params.apiKey,
+    apiKey: params.apiKey ?? '',
     reviewId,
     signal: params.signal,
   })
   const documentProfile = profileResult.documentProfile
   rawModelOutputs.push(...profileResult.rawModelOutputs)
+  snapshot.documentProfile = documentProfile
+  snapshot.rawModelOutputs = rawModelOutputs
 
   completed += 1
   params.onProgress?.({
@@ -257,6 +356,7 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
     documentProfile,
   })
   const plannedSkills = checkPlan.skills_to_run
+  snapshot.checkPlanEntries = checkPlan.entries
 
   const { tasks, staticResults } = buildTaskQueue({
     selectedSkills: plannedSkills,
@@ -265,8 +365,12 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
   })
   const modelOutputsBySkill = new Map<string, ModelJudgeOutput[]>()
   const expectedSkillModelCalls = tasks.filter((task) => task.kind === 'llm').length
+  snapshot.expectedSkillModelCalls = expectedSkillModelCalls
 
-  await runWithConcurrency(tasks, 6, async (task) => {
+  await runWithConcurrency(
+    tasks,
+    6,
+    async (task) => {
     const result = await runTask({
       task,
       targetSp: params.targetSp,
@@ -286,6 +390,13 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
       rawModelOutputs.push(...result.output.raw_model_outputs)
       if (result.output.error) allErrors.push(`${result.skillId} / ${result.output.modelId}: ${result.output.error}`)
     }
+    snapshot.rawModelOutputs = [...rawModelOutputs]
+    // 去重还没跑到时就先把当前已发现的原始issue包装进快照(不去重、不合并)，保证中断时不会丢失已发现的问题。
+    // 注意：LLM类的found结果要经aggregateVotes投票聊合才能取出，直接用rawIssues不会包含LLM结果(这里static+实时预览投票合并)
+    const previewVotedIssues = plannedSkills
+      .filter((skill) => skill.execution_mode !== 'static_check')
+      .flatMap((skill) => aggregateVotes(modelOutputsBySkill.get(skill.id) ?? []))
+    snapshot.finalIssues = issuesToRawGroups([...rawIssues, ...previewVotedIssues])
 
     completed += 1
     params.onProgress?.({
@@ -300,17 +411,24 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
     })
 
     return result
-  })
+    },
+    params.signal,
+  )
+  if (params.signal?.aborted) {
+    throw new DOMException('审查已被用户主动停止', 'AbortError')
+  }
 
   const actualSkillModelCalls = [...modelOutputsBySkill.values()]
     .flat()
     .filter((output) => !output.error)
     .length
+  snapshot.actualSkillModelCalls = actualSkillModelCalls
   const incompleteChecks = buildIncompleteChecks({
     selectedSkills: plannedSkills,
     models,
     modelOutputsBySkill,
   })
+  snapshot.incompleteChecks = incompleteChecks
 
   plannedSkills
     .filter((skill) => skill.execution_mode !== 'static_check')
@@ -333,6 +451,9 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
 
   const deduplicated = await deduplicateIssues(rawIssues, plannedSkills, { embeddingApiKey: params.apiKey })
   completed += 1
+  // 去重完成后就是一份结构完整的 IssueGroup[]，先写进快照——即使 consolidation 步骤失败，
+  // 用户仍能拿到“已发现、去重后但尚未经B1B2把关”的完整问题列表，不是空白一片。
+  snapshot.finalIssues = deduplicated.groups
   params.onProgress?.({
     phase: 'dedupe',
     label: '正在合并重复问题',
@@ -353,6 +474,7 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
     reviewId,
     onRawModelOutputs: (outputs) => {
       rawModelOutputs.push(...outputs)
+      snapshot.rawModelOutputs = [...rawModelOutputs]
     },
     signal: params.signal,
   })
@@ -373,6 +495,9 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
     embeddingApiKey: params.apiKey,
   })
   const prescription = consolidation.prescription
+  // consolidation完成后的结果比去重刚完成时更完整(含B1B2把关+处方)，覆盖前面那个快照点
+  snapshot.finalIssues = finalIssues
+  snapshot.prescription = prescription
 
   // v6.4 修复方案生成：为每个大问题生成可确认应用的改前/改后文本（失败不阻塞报告）
   completed += 1
@@ -402,13 +527,15 @@ export async function runReview(params: RunReviewParams): Promise<ReviewReport> 
     prescription,
     confidenceByPriority,
     model: consolidationSelection.model,
-    apiKey: params.apiKey,
+    apiKey: params.apiKey ?? '',
     reviewId,
     signal: params.signal,
     onRawModelOutputs: (outputs) => {
       rawModelOutputs.push(...outputs)
+      snapshot.rawModelOutputs = [...rawModelOutputs]
     },
   })
+  snapshot.fixPlans = fixPlans
 
   completed += 1
   params.onProgress?.({

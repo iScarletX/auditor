@@ -1,5 +1,5 @@
-import { History, Play, ShieldCheck } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { History, Play, ShieldCheck, Square, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ConsolidationModelPicker } from './components/ConsolidationModelPicker/ConsolidationModelPicker'
 import { DiffPreview } from './components/DiffPreview/DiffPreview'
 import { IssueDetailPanel } from './components/IssueDetailPanel/IssueDetailPanel'
@@ -18,7 +18,7 @@ import { runReview } from './core/orchestrator/runReview'
 import { calculateReviewScore } from './core/orchestrator/scoreCalculator'
 import { loadBuiltinSkills } from './core/skillLoader/loadBuiltinSkills'
 import { loadUserSkills } from './core/skillLoader/loadUserSkills'
-import { listReviewRecords, saveDraftRevision, saveReviewRecord } from './core/storage/indexedDbStore'
+import { deleteReviewRecord, listReviewRecords, saveDraftRevision, saveReviewRecord } from './core/storage/indexedDbStore'
 import type { ReviewHistoryRecord } from './core/storage/indexedDbStore'
 import { encryptAndStoreApiKey, loadDecryptedApiKey } from './core/storage/keyEncryption'
 import {
@@ -216,6 +216,7 @@ function App() {
   const [previewIssue, setPreviewIssue] = useState<Issue | null>(null)
   const [previewDiff, setPreviewDiff] = useState<DiffResult | null>(null)
   const [previewApply, setPreviewApply] = useState<(() => Promise<void>) | null>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -292,6 +293,12 @@ function App() {
     setHistory(await listReviewRecords())
   }
 
+  const removeHistoryRecord = async (id: string, event: { stopPropagation: () => void }) => {
+    event.stopPropagation()
+    await deleteReviewRecord(id)
+    await refreshHistory()
+  }
+
   const startReview = async () => {
     if (running) return
     setError(null)
@@ -313,6 +320,8 @@ function App() {
       return
     }
 
+    const controller = new AbortController()
+    abortControllerRef.current = controller
     setRunning(true)
     try {
       const apiKey = await loadDecryptedApiKey()
@@ -325,12 +334,16 @@ function App() {
         selectedModels: models,
         manualConsolidationModelId,
         apiKey,
+        signal: controller.signal,
         onProgress: (event) => {
           setEvents((current) => [...current, event])
         },
       })
       setReport(finalReport)
       exposeReportForDebug(finalReport)
+      if (finalReport.meta.degraded) {
+        setError(finalReport.meta.degraded_reason ?? '本次审查未完整结束，以下为已完成部分的结果。')
+      }
       await saveReviewRecord({
         id: reviewId,
         createdAt: new Date().toISOString(),
@@ -344,7 +357,12 @@ function App() {
       setError(reviewError instanceof Error ? reviewError.message : '审查失败')
     } finally {
       setRunning(false)
+      abortControllerRef.current = null
     }
+  }
+
+  const stopReview = () => {
+    abortControllerRef.current?.abort()
   }
 
   const makePseudoIssue = (issueGroup: IssueGroup, markerIndex: number): Issue | null => {
@@ -589,10 +607,18 @@ function App() {
               {error}
             </div>
           ) : null}
-          <Button type="button" className="w-full" onClick={() => void startReview()} disabled={running}>
-            <Play className="h-4 w-4" />
-            {running ? '审查中' : '开始审查'}
-          </Button>
+          <div className="flex gap-2">
+            <Button type="button" className="flex-1" onClick={() => void startReview()} disabled={running}>
+              <Play className="h-4 w-4" />
+              {running ? '审查中' : '开始审查'}
+            </Button>
+            {running ? (
+              <Button type="button" variant="danger" onClick={stopReview} title="停止审查，保留已完成部分的结果">
+                <Square className="h-4 w-4" />
+                停止
+              </Button>
+            ) : null}
+          </div>
         </aside>
 
         <section className="space-y-4">
@@ -631,17 +657,25 @@ function App() {
             ) : (
               <div className="grid gap-2 md:grid-cols-2">
                 {history.slice(0, 8).map((record) => (
-                  <button
+                  <div
                     key={record.id}
-                    type="button"
-                    className="block w-full rounded-md border border-slate-200 px-3 py-2 text-left text-xs transition hover:bg-slate-50"
-                    onClick={() => loadHistoryRecord(record)}
+                    className="group relative block w-full rounded-md border border-slate-200 px-3 py-2 text-left text-xs transition hover:bg-slate-50"
                   >
-                    <div className="font-medium text-slate-900">{record.title}</div>
-                    <div className="mt-1 text-slate-500">
-                      {new Date(record.createdAt).toLocaleString()} · {record.report.issues.length} 个问题
-                    </div>
-                  </button>
+                    <button type="button" className="block w-full pr-6 text-left" onClick={() => loadHistoryRecord(record)}>
+                      <div className="font-medium text-slate-900">{record.title}</div>
+                      <div className="mt-1 text-slate-500">
+                        {new Date(record.createdAt).toLocaleString()} · {record.report.issues.length} 个问题
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="absolute right-2 top-2 rounded p-1 text-slate-300 opacity-0 transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
+                      onClick={(event) => void removeHistoryRecord(record.id, event)}
+                      title="删除这条历史记录"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}

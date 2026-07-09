@@ -17,6 +17,7 @@
     "ajv": "^8.20.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "jszip": "^3.10.1",
     "lucide-react": "^1.23.0",
     "monaco-editor": "^0.55.1",
     "react": "^19.2.7",
