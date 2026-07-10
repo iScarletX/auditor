@@ -776,15 +776,15 @@ function App() {
   }
 
   return (
-    <main className="min-h-screen text-slate-950">
-      <header className="border-b border-indigo-100/60 bg-white/70 backdrop-blur-md">
-        <div className="mx-auto flex max-w-[1540px] items-center gap-3 px-4 py-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-600 via-blue-600 to-sky-500 text-white shadow-md shadow-indigo-200">
+    <main className="min-h-screen text-[#1f1f1f]">
+      <header className="sticky top-0 z-30 border-b border-[#e1e3e1] bg-[#f8fafd]/85 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-[1540px] items-center gap-3 px-6 py-3.5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#0b57d0] text-white shadow-m3">
             <ShieldCheck className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="bg-gradient-to-r from-indigo-700 via-blue-700 to-sky-600 bg-clip-text text-lg font-bold tracking-tight text-transparent">Arbiter</h1>
-            <p className="text-sm text-slate-500">AI 指令审查工作台 · Prompt / Skill</p>
+            <h1 className="text-lg font-semibold tracking-tight text-[#1f1f1f]">Arbiter</h1>
+            <p className="text-xs text-slate-500">AI 指令审查工作台 · Prompt / Skill</p>
           </div>
         </div>
       </header>
@@ -864,7 +864,7 @@ function App() {
             />
           ) : null}
 
-          <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100 p-4">
+          <section className="rounded-2xl border border-[#e1e3e1] bg-white shadow-m3 p-4">
             <div className="mb-3 flex items-center gap-2">
               <History className="h-4 w-4 text-slate-500" />
               <h2 className="text-sm font-semibold text-slate-950">历史记录</h2>

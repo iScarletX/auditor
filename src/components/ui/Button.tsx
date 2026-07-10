@@ -2,21 +2,21 @@ import type { ButtonHTMLAttributes } from 'react'
 import { cva, type VariantProps } from 'class-variance-authority'
 import { cn } from '../../lib/utils'
 
+// Material 3 风：胶囊形(全圆角)、纯色不用渐变(渐变是廉价感来源)、hover 靠轻微阴影和色阶变化
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex items-center justify-center gap-2 rounded-full text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b57d0]/40 disabled:pointer-events-none disabled:opacity-40',
   {
     variants: {
       variant: {
-        primary:
-          'bg-gradient-to-r from-indigo-600 to-blue-600 text-white shadow-sm shadow-indigo-200 hover:from-indigo-500 hover:to-blue-500 hover:shadow-md hover:shadow-indigo-200',
-        secondary: 'border border-slate-200 bg-white text-slate-800 shadow-sm hover:border-indigo-200 hover:bg-indigo-50/40 hover:text-indigo-700',
+        primary: 'bg-[#0b57d0] text-white hover:bg-[#0a4fc0] hover:shadow-m3-md active:bg-[#093f9a]',
+        secondary: 'border border-[#c4c7c5] bg-white text-[#0b57d0] hover:bg-[#ecf3fe] hover:border-[#0b57d0]/30',
         ghost: 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
-        danger: 'bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-sm hover:from-red-500 hover:to-rose-500',
+        danger: 'bg-[#b3261e] text-white hover:bg-[#a01c15] hover:shadow-m3-md',
       },
       size: {
-        sm: 'h-8 px-3',
-        md: 'h-10 px-4',
-        icon: 'h-9 w-9',
+        sm: 'h-8 px-4',
+        md: 'h-10 px-6',
+        icon: 'h-10 w-10',
       },
     },
     defaultVariants: {

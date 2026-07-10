@@ -425,8 +425,11 @@ function ProblemDetail({
                         {line || ' '}
                       </span>
                     </div>
-                    <div className="ml-11 mr-3 my-1.5 rounded-md border border-red-100 bg-white px-3 py-2 font-sans">
-                      <p className="whitespace-pre-line text-xs leading-5 text-slate-600">{position.reason}</p>
+                    <div className="ml-11 mr-3 my-1.5 rounded-lg border-l-4 border-l-red-400 border border-red-100 bg-red-50/70 px-3 py-2 font-sans">
+                      <p className="flex items-start gap-1.5 whitespace-pre-line text-xs leading-5 text-red-900">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" />
+                        <span>{position.reason}</span>
+                      </p>
                     </div>
                   </div>
                 )
@@ -528,7 +531,7 @@ export function ReportView({
       ) : null}
 
       {/* 体检卡：一句话理解 + 得分 + 雷达 */}
-      <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100 p-5">
+      <section className="rounded-2xl border border-[#e1e3e1] bg-white shadow-m3 p-5">
         <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
           <div className="min-w-0">
             <p className="text-base font-semibold leading-7 text-slate-950">{profile.document_purpose}</p>
@@ -587,7 +590,7 @@ export function ReportView({
           </div>
           <div className="flex flex-col items-center justify-center">
             <div className="text-center">
-              <span className="text-5xl font-bold text-slate-950">{score.total}</span>
+              <span className="text-6xl font-semibold tracking-tight text-[#0b57d0]">{score.total}</span>
               <span className="ml-1 text-sm text-slate-400">/ 100</span>
             </div>
             <ScoreRadar dimensions={score.dimensions} />
@@ -596,7 +599,7 @@ export function ReportView({
       </section>
 
       {/* 结论 + 大问题列表（⑦ 倒金字塔：必改区在前、次要区折叠） */}
-      <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100 p-5">
+      <section className="rounded-2xl border border-[#e1e3e1] bg-white shadow-m3 p-5">
         <p className="text-sm leading-6 text-slate-700">{report.prescription.overall_assessment}</p>
 
         {problems.length === 0 ? (
@@ -667,7 +670,7 @@ export function ReportView({
       </section>
 
       {/* 完整原文（默认折叠） */}
-      <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100">
+      <section className="rounded-2xl border border-[#e1e3e1] bg-white shadow-m3">
         <button
           type="button"
           className="flex w-full items-center gap-2 px-5 py-3 text-left"

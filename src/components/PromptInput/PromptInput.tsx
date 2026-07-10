@@ -52,7 +52,7 @@ export function PromptInput({ value, onChange }: PromptInputProps) {
   }
 
   return (
-    <section className="flex min-h-[430px] flex-col overflow-hidden rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100">
+    <section className="flex min-h-[430px] flex-col overflow-hidden rounded-2xl border border-[#e1e3e1] bg-white shadow-m3">
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
         <div className="flex items-center gap-2">
           <FileText className="h-4 w-4 text-slate-500" />

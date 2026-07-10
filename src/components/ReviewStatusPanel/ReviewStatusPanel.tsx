@@ -64,7 +64,7 @@ export function ReviewStatusPanel({
 
   if (running) {
     return (
-      <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100 p-5">
+      <section className="rounded-2xl border border-[#e1e3e1] bg-white shadow-m3 p-5">
         <div className="mb-4 flex items-center gap-2">
           <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
           <h2 className="text-sm font-semibold text-slate-950">正在审查</h2>
@@ -121,7 +121,7 @@ export function ReviewStatusPanel({
           </section>
         ) : null}
 
-        <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100 p-5">
+        <section className="rounded-2xl border border-[#e1e3e1] bg-white shadow-m3 p-5">
           <div className="mb-4 flex items-center gap-2">
             <FileText className="h-4 w-4 text-slate-500" />
             <h2 className="text-sm font-semibold text-slate-950">我们理解这份提示词是</h2>
@@ -221,7 +221,7 @@ export function ReviewStatusPanel({
           ) : null}
         </section>
 
-        <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100 p-5">
+        <section className="rounded-2xl border border-[#e1e3e1] bg-white shadow-m3 p-5">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <BarChart3 className="h-4 w-4 text-slate-500" />
@@ -352,7 +352,7 @@ export function ReviewStatusPanel({
   }
 
   return (
-    <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100 p-5">
+    <section className="rounded-2xl border border-[#e1e3e1] bg-white shadow-m3 p-5">
       <div className="mb-3 flex items-center gap-2">
         <Sparkles className="h-4 w-4 text-slate-500" />
         <h2 className="text-sm font-semibold text-slate-950">等待开始</h2>
