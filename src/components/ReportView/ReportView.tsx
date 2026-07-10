@@ -530,8 +530,8 @@ export function ReportView({
         </section>
       ) : null}
 
-      {/* 体检卡：一句话理解 + 得分 + 雷达 */}
-      <section className="rounded-2xl border border-[#e1e3e1] bg-white shadow-m3 p-5">
+      {/* 体检卡：一句话理解 + 得分 + 雷达（门面区用毛玻璃质感） */}
+      <section className="glass-card rounded-2xl border border-white/60 shadow-m3-md p-6">
         <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
           <div className="min-w-0">
             <p className="text-base font-semibold leading-7 text-slate-950">{profile.document_purpose}</p>
@@ -590,7 +590,7 @@ export function ReportView({
           </div>
           <div className="flex flex-col items-center justify-center">
             <div className="text-center">
-              <span className="text-6xl font-semibold tracking-tight text-[#0b57d0]">{score.total}</span>
+              <span className="text-6xl font-extrabold tracking-tight text-[#059669]">{score.total}</span>
               <span className="ml-1 text-sm text-slate-400">/ 100</span>
             </div>
             <ScoreRadar dimensions={score.dimensions} />

@@ -35,12 +35,12 @@ export function ScoreRadar({ dimensions }: { dimensions: DimensionScore[] }) {
     <svg viewBox={`0 0 ${size} ${size}`} className="h-64 w-64">
       <defs>
         <linearGradient id="radar-fill" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#6366f1" stopOpacity="0.25" />
-          <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0.12" />
+          <stop offset="0%" stopColor="#059669" stopOpacity="0.28" />
+          <stop offset="100%" stopColor="#34d399" stopOpacity="0.12" />
         </linearGradient>
         <linearGradient id="radar-stroke" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#6366f1" />
-          <stop offset="100%" stopColor="#0ea5e9" />
+          <stop offset="0%" stopColor="#059669" />
+          <stop offset="100%" stopColor="#10b981" />
         </linearGradient>
       </defs>
       {rings.map((ring) => (
@@ -63,7 +63,7 @@ export function ScoreRadar({ dimensions }: { dimensions: DimensionScore[] }) {
       {dimensions.map((dim, index) => {
         const [x, y] = pointOf(index, dim.score ?? 0)
         return dim.score === null ? null : (
-          <circle key={dim.key} cx={x} cy={y} r="3" fill="#6366f1" />
+          <circle key={dim.key} cx={x} cy={y} r="3" fill="#059669" />
         )
       })}
       {dimensions.map((dim, index) => {

@@ -777,13 +777,13 @@ function App() {
 
   return (
     <main className="min-h-screen text-[#1f1f1f]">
-      <header className="sticky top-0 z-30 border-b border-[#e1e3e1] bg-[#f8fafd]/85 backdrop-blur-xl">
+      <header className="sticky top-0 z-30 border-b border-[#dde7e1] bg-white/70 backdrop-blur-xl">
         <div className="mx-auto flex max-w-[1540px] items-center gap-3 px-6 py-3.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#0b57d0] text-white shadow-m3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-[#059669] to-[#047857] text-white shadow-m3">
             <ShieldCheck className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold tracking-tight text-[#1f1f1f]">Arbiter</h1>
+            <h1 className="text-xl font-extrabold tracking-tight text-[#134e37]">Arbiter</h1>
             <p className="text-xs text-slate-500">AI 指令审查工作台 · Prompt / Skill</p>
           </div>
         </div>
