@@ -30,6 +30,7 @@ import type {
   Issue,
   IssueGroup,
   ModelConfig,
+  PrescriptionPriorityAction,
   ReviewProgressEvent,
   ReviewReport,
   SeverityDisplay,
@@ -114,6 +115,29 @@ const NATURE_TEXT: Record<string, string> = {
   safety: '安全合规',
 }
 
+const SEVERITY_RANK_MD: Record<SeverityDisplay, number> = { 严重: 0, 中等: 1, 轻微: 2 }
+
+/**
+ * 与ReportView.tsx里buildBigProblems的严重度计算同一思路(取关联issue里最严重的那个，仅供参考的单模型发现不参与排序)，
+ * 因Markdown导出是单独的字符串拼接函数，为避免过度抽取共享模块带来的联动风险，这里轻量独立实现一份。
+ */
+function actionSeverity(report: ReviewReport, action: PrescriptionPriorityAction): SeverityDisplay {
+  const findIssue = (id: string) =>
+    report.issues.find(
+      (issue) =>
+        issue.id === id ||
+        issue.locations.some((location) => location.source_issue_id === id) ||
+        (id.length >= 8 && (issue.id.includes(id) || id.includes(issue.id))),
+    )
+  const related = action.related_issue_ids.map(findIssue).filter((issue): issue is IssueGroup => Boolean(issue))
+  const confirmedRelated = related.filter((issue) => issue.confidence_display !== '仅供参考')
+  if (confirmedRelated.length === 0) return '中等'
+  return confirmedRelated.reduce<SeverityDisplay>(
+    (acc, issue) => (SEVERITY_RANK_MD[issue.severity_display] < SEVERITY_RANK_MD[acc] ? issue.severity_display : acc),
+    '轻微',
+  )
+}
+
 function buildReportMarkdown(report: ReviewReport, targetSp: string) {
   const title = promptSummaryForFilename(targetSp, report)
   const profile = report.document_profile
@@ -136,19 +160,42 @@ function buildReportMarkdown(report: ReviewReport, targetSp: string) {
     .join('\n')
 
   const fixPlanFor = (priority: number) => (report.fix_plans ?? []).find((plan) => plan.action_priority === priority)
+
+  // 与网页端同样的信息层次：标题=现象(problem_statement)，应对思路紧跟其后(主体信息)，
+  // 具体改法用代码块展示(模拟网页的before/after卡片)，判断依据(grouping_logic、why)用details折叠块弱化，
+  // 不再把五种信息拴在一段里密密麻麻紧贴在一起。
+  const severityMark = (severity: string) => (severity === '严重' ? '\u{1F534}' : severity === '中等' ? '\u{1F7E0}' : '\u26AA')
+  const buildFixSection = (plan: ReturnType<typeof fixPlanFor>) => {
+    if (!plan) return ''
+    if (plan.edits.length === 0) {
+      return `\n**具体修改**：${plan.no_fix_reason ?? '需要业务决策，无法给出文字级修复。'}\n`
+    }
+    const modeNote = plan.apply_mode === 'group' ? `（以下 ${plan.edits.length} 处必须作为一组一起应用）` : '（每处可单独应用）'
+    const editBlocks = plan.edits.map((edit, index) =>
+      `${plan.edits.length > 1 ? `— 第 ${index + 1} 处 —\n` : ''}` +
+      '```diff\n' +
+      `- ${edit.before_text}\n` +
+      `+ ${edit.after_text}\n` +
+      '```\n' +
+      `> ${edit.note}\n`,
+    ).join('\n')
+    return `\n**具体修改** ${modeNote}\n${plan.confidence_caveat ? '\n> ⚠️ 这个问题仅由单个模型提出（未获得交叉确认），以下修法仅供参考，建议人工复核后再应用。\n' : ''}\n${editBlocks}`
+  }
+
   const problems = actions.length > 0
     ? actions.map((action) => {
-        const nature = action.nature ? `［${NATURE_TEXT[action.nature] ?? action.nature}］` : ''
-        const relation = action.position_relation === 'joint' ? '（多处联合构成）' : ''
-        const grouping = action.grouping_logic ? `\n   归组逻辑：${action.grouping_logic}` : ''
+        const nature = action.nature ? `\`${NATURE_TEXT[action.nature] ?? action.nature}\`` : ''
+        const relation = action.position_relation === 'joint' ? ' · 多处联合构成' : ''
         const plan = fixPlanFor(action.priority)
-        const fixText = plan
-          ? plan.edits.length > 0
-            ? `\n   建议改法（${plan.apply_mode === 'group' ? '需整组应用' : '每处可单独应用'}）：\n${plan.edits.map((edit) => `   - 改前：${edit.before_text.slice(0, 80)}\n     改后：${edit.after_text.slice(0, 80)}\n     说明：${edit.note}`).join('\n')}`
-            : `\n   修复说明：${plan.no_fix_reason ?? '需要业务决策，无法给出文字级修复。'}`
+        const judgmentLines: string[] = []
+        if (action.grouping_logic) judgmentLines.push(`为什么这几处是同一个问题：${action.grouping_logic}`)
+        if (action.why) judgmentLines.push(`优先处理理由：${action.why}`)
+        if (action.conflicts_resolved) judgmentLines.push(`矛盾裁决：${action.conflicts_resolved}`)
+        const judgmentSection = judgmentLines.length > 0
+          ? `\n<details>\n<summary>查看判定依据</summary>\n\n${judgmentLines.map((line) => `> ${line}`).join('\n>\n')}\n\n</details>\n`
           : ''
-        return `${action.priority}. **${action.problem_statement}** ${nature}${relation}\n   应对思路：${action.action_summary}\n   优先处理理由：${action.why}${grouping}${fixText}`
-      }).join('\n\n')
+        return `### ${severityMark(actionSeverity(report, action))} ${action.priority}. ${action.problem_statement} ${nature}${relation}\n\n**应对思路**：${action.action_summary}\n${buildFixSection(plan)}${judgmentSection}`
+      }).join('\n\n---\n\n')
     : '没有需要处理的问题。'
 
   const skipped = (report.check_plan ?? []).filter((entry) => entry.decision === 'skip')
@@ -166,6 +213,16 @@ function buildReportMarkdown(report: ReviewReport, targetSp: string) {
       `- ${issue.title}：${issue.description.split('\n')[0].slice(0, 100)}`,
     ).join('\n')}\n`
     : ''
+
+  // 开头目录：纯文本环境里也先让人一眼扫到规模，不用滚到底才知道有几个问题
+  const severityCounts: Record<string, number> = { 严重: 0, 中等: 0, 轻微: 0 }
+  actions.forEach((action) => {
+    const key = actionSeverity(report, action)
+    severityCounts[key] = (severityCounts[key] ?? 0) + 1
+  })
+  const overviewLine = actions.length > 0
+    ? `共发现 ${actions.length} 个优先问题：\u{1F534} 严重 ${severityCounts.严重} · \u{1F7E0} 中等 ${severityCounts.中等} · \u26AA 轻微 ${severityCounts.轻微}`
+    : '本次未发现需优先处理的问题。'
 
   return `# Butler 审查报告：${title}
 
@@ -185,11 +242,9 @@ ${dimensionLines}
 
 计分规则：只按多模型确认的问题扣分；未检维度不参与总分；权重由文档特征决定。
 
-## 总体评估
-
-${report.prescription.overall_assessment}
-
 ## 主要问题
+
+${overviewLine}
 
 ${problems}
 ${report.prescription.minor_notes.length > 0 ? `\n## 次要建议\n\n${report.prescription.minor_notes.map((note) => `- ${note}`).join('\n')}\n` : ''}${skippedSection}${referenceSection}`

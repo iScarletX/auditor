@@ -239,6 +239,17 @@ interface EditRuntime {
 
 // ===== 大问题列表行（必改区/次要区复用） =====
 
+/**
+ * 列表行只需要一个简短标题，完整三层描述(现象+原因+后果)留在详情页。
+ * 不新增字段让LLM另外生成短标题(避免引入新的生成质量不确定性)，而是前端根据现有problem_statement
+ * 取首句(遇到。！？就截断)，过长再按字数截断加省略号。
+ */
+function shortTitleOf(title: string): string {
+  const firstSentence = title.split(/(?<=[。！？!?])/)[0]?.trim() || title
+  if (firstSentence.length <= 40) return firstSentence
+  return `${firstSentence.slice(0, 40)}…`
+}
+
 function ProblemRow({ problem, onClick }: { problem: BigProblem; onClick: () => void }) {
   return (
     <button
@@ -248,7 +259,7 @@ function ProblemRow({ problem, onClick }: { problem: BigProblem; onClick: () => 
     >
       <span className={cn('h-3 w-3 shrink-0 rounded-full', severityDot[problem.severity])} />
       <span className="min-w-0 flex-1">
-        <span className="text-sm font-medium text-slate-950">{problem.title}</span>
+        <span className="text-sm font-medium text-slate-950">{shortTitleOf(problem.title)}</span>
         <span className="ml-2 inline-flex flex-wrap items-center gap-1.5 align-middle">
           {problem.nature ? (
             <Badge className={NATURE_BADGE[problem.nature]}>{NATURE_LABELS[problem.nature]}</Badge>
@@ -1034,7 +1045,7 @@ export function ReportView({
                         <div key={problem.key} className="rounded-md border border-slate-200 bg-white px-3 py-2.5">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className={cn('h-2 w-2 rounded-full', severityDot[problem.severity])} />
-                            <span className="text-xs font-semibold text-slate-900">{problem.title}</span>
+                            <span className="text-xs font-semibold text-slate-900">{shortTitleOf(problem.title)}</span>
                             {problem.nature ? (
                               <Badge className={NATURE_BADGE[problem.nature]}>{NATURE_LABELS[problem.nature]}</Badge>
                             ) : null}

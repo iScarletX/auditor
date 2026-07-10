@@ -177,7 +177,7 @@ prescription生成规则：
 - 每条priority_action必须填写grouping_logic字段：用一两句话说清楚为什么这几处属于同一个问题、共同根因是什么。如果说不清楚共同根因，就不要硬合并，拆成两条。
 - 每条priority_action必须填写position_relation字段：joint表示关联的几处联合构成同一个问题（如A处规则与B处规则矛盾，必须一起看才能理解）；independent表示同类问题的多个独立实例（每处单独看都是一个完整问题）。
 - 如果多条issue的修复建议互相冲突，不能把冲突建议并列甩给用户；必须在同一个priority_action里给出统一处理方案，并在conflicts_resolved说明取舍逻辑。
-- priority_actions数量应显著少于原始issue总数；低优先级、暂不影响基本可用性的内容放入minor_notes。
+- priority_actions数量应显著少于原始issue总数；低优先级、暂不影响基本可用性的内容放入minor_notes。**生成minor_notes之前，必须回头逐条核对刚刚写完的priority_actions，确认这个话题/检查项是否已经在某一条priority_action里出现过(即使措辞不一样、视角不一样，只要是同一个根本问题就算重复)，已经出现过的话题禁止再写进 minor_notes，只能写真正没在priority_actions里出现过的新话题。**
 - revised_document_available只有在priority_actions数量少、互相兼容、锚点明确、无需外部配置或人工判断时才能为true。
 - revised_document_available为true时，必须返回revised_document_after，内容是应用priority_actions后的完整target_sp；生成后必须自检是否引入新的内部矛盾。只要存在不确定、互相打架或可能改变业务意图的风险，就设为false并说明原因。
 - 不允许把模型选择、max_tokens、temperature等调用配置建议写入prescription。
