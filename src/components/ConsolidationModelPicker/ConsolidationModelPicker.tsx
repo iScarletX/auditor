@@ -27,7 +27,7 @@ export function ConsolidationModelPicker({ models, availableModels, value, onCha
   const selectedKeys = new Set(manualModel ? [`${manualModel.provider}:${manualModel.baseUrl}:${manualModel.modelId}`] : [])
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4">
+    <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100 p-4">
       <button
         type="button"
         className="flex w-full items-center justify-between text-left"

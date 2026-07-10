@@ -14,7 +14,7 @@ import type {
 import { buildCheckPlan } from './checkPlanner'
 import { selectConsolidationModel } from './consolidationModelSelector'
 import { emptyPrescription, runConsolidationReview } from './consolidationReviewer'
-import { generateFixPlans, strongestConfidenceOf } from './fixPlanGenerator'
+
 import { runWithConcurrency } from './concurrencyPool'
 import { runDocumentProfile } from './documentProfiler'
 import { deduplicateIssues, issuesToRawGroups, mergeConsolidationIntoGroups } from './issueDeduplicator'
@@ -502,50 +502,8 @@ async function runReviewInternal(
   snapshot.finalIssues = finalIssues
   snapshot.prescription = prescription
 
-  // v6.4 修复方案生成：为每个大问题生成可确认应用的改前/改后文本（失败不阻塞报告）
-  completed += 1
-  params.onProgress?.({
-    phase: 'consolidation',
-    label: '正在生成修复方案',
-    completed,
-    total: totalSteps,
-    foundCount: deduplicated.groups.length,
-    errors: [...allErrors],
-  })
-  // S4-⑥守门员：为每个大问题计算关联issue的最强证据强度，供修法生成时矛盾裁决+往修法附加confidence_caveat标记
-  // 宽松包含匹配：B2汇总阶段有时会自行简化related_issue_ids里的id(比如把 group-05_xxx-yyy 弄成 group-05_xxx)，
-  // 若只做精确匹配会导致findGroupByIssueId找不到，进而让下游fixPlanGenerator拿到错误的confidence或缺失上下文，
-  // 是导致“具体修改内容与问题无关”这类错配现象的根源之一。
-  const findGroupByIssueId = (id: string) =>
-    finalIssues.find(
-      (group) =>
-        group.id === id ||
-        group.locations.some((location) => location.source_issue_id === id) ||
-        (id.length >= 8 && (group.id.includes(id) || id.includes(group.id))),
-    )
-  const confidenceByPriority = new Map(
-    prescription.priority_actions.map((action) => {
-      const relatedGroups = action.related_issue_ids.map(findGroupByIssueId).filter((group): group is (typeof finalIssues)[number] => Boolean(group))
-      const confidence = strongestConfidenceOf(relatedGroups.map((group) => group.confidence_display))
-      return [action.priority, confidence] as const
-    }),
-  )
-  const fixPlans = await generateFixPlans({
-    targetSp: params.targetSp,
-    documentProfile,
-    prescription,
-    confidenceByPriority,
-    model: consolidationSelection.model,
-    apiKey: params.apiKey ?? '',
-    reviewId,
-    signal: params.signal,
-    onRawModelOutputs: (outputs) => {
-      rawModelOutputs.push(...outputs)
-      snapshot.rawModelOutputs = [...rawModelOutputs]
-    },
-  })
-  snapshot.fixPlans = fixPlans
-
+  // 修复方案生成已改为“用户点击修改时才按需生成”(App层调用generateFixPlans)，不再在审查流程里自动跑：
+  // 1) 用户只看报告不改时不浪费钱和时间 2) 按需生成时能把完整位置清单传入，要求逐位置覆盖
   completed += 1
   params.onProgress?.({
     phase: 'complete',
@@ -574,7 +532,6 @@ async function runReviewInternal(
     check_plan: checkPlan.entries,
     // ReviewReport.prescription is the persisted copy of B2's prescription; B2 remains the sole source.
     prescription,
-    ...(fixPlans.length > 0 ? { fix_plans: fixPlans } : {}),
     incomplete_checks: incompleteChecks,
     issues: finalIssues,
     raw_model_outputs: rawModelOutputs,

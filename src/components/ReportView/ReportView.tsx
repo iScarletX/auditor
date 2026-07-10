@@ -1,15 +1,13 @@
 import {
   AlertTriangle,
-  Check,
   ChevronDown,
   ChevronRight,
   Download,
   FileSearch,
   Pencil,
-  RotateCcw,
   X,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type {
   IssueGroup,
   ReviewReport,
@@ -28,6 +26,8 @@ interface ReportViewProps {
   onOpenIssue: (issue: IssueGroup) => void
   onExportJson: () => void
   onExportMarkdown: () => void
+  /** 打开整体修改工作台(点击时才按需生成修复方案，不在审查流程里自动跑) */
+  onOpenFixWorkbench: () => void
 }
 
 const NATURE_LABELS: Record<string, string> = {
@@ -227,16 +227,6 @@ function buildBigProblems(report: ReviewReport, locator: Locator) {
   return { problems, referenceIssues }
 }
 
-// ===== 修复应用状态 =====
-
-type EditState = 'pending' | 'applied' | 'ignored'
-
-interface EditRuntime {
-  state: EditState
-  /** 用户编辑后的替换文本（默认 = 模型建议的 after_text） */
-  effectiveAfter: string
-}
-
 // ===== 大问题列表行（必改区/次要区复用） =====
 
 /**
@@ -282,144 +272,37 @@ function ProblemRow({ problem, onClick }: { problem: BigProblem; onClick: () => 
 
 function ProblemDetail({
   problem,
-  report,
   locator,
-  workingSp,
-  editRuntimes,
-  onApplyEdit,
-  onIgnoreEdit,
-  onRevertEdit,
-  onEditText,
   onClose,
-  onOpenIssue,
 }: {
   problem: BigProblem
-  report: ReviewReport
   locator: Locator
-  workingSp: string
-  editRuntimes: Map<string, EditRuntime>
-  onApplyEdit: (editKeys: string[]) => void
-  onIgnoreEdit: (editKey: string) => void
-  onRevertEdit: (editKeys: string[]) => void
-  onEditText: (editKey: string, text: string) => void
   onClose: () => void
-  onOpenIssue: (issue: IssueGroup) => void
 }) {
-  const [expandedLine, setExpandedLine] = useState<number | null>(null)
-  const [editingKey, setEditingKey] = useState<string | null>(null)
-  const [showRawData, setShowRawData] = useState(false)
   const [showMeta, setShowMeta] = useState(false)
-
-  const fixPlan = problem.actionPriority !== null
-    ? (report.fix_plans ?? []).find((plan) => plan.action_priority === problem.actionPriority)
-    : undefined
-  const isGroupFix = fixPlan?.apply_mode === 'group'
-  const editKey = (index: number) => `${problem.actionPriority}-${index}`
-  const groupEditKeys = fixPlan ? fixPlan.edits.map((_, index) => editKey(index)) : []
-  const groupState: EditState = groupEditKeys.length > 0
-    ? (editRuntimes.get(groupEditKeys[0])?.state ?? 'pending')
-    : 'pending'
+  const [highlightLine, setHighlightLine] = useState<number | null>(null)
+  const docContainerRef = useRef<HTMLDivElement>(null)
 
   const positionLines = useMemo(
     () => new Map(problem.positions.map((position) => [position.lineIndex, position])),
     [problem],
   )
-  const otherLinesLabel = (current: number) =>
-    problem.positions
-      .filter((position) => position.lineIndex !== current)
-      .map((position) => `第 ${position.lineIndex + 1} 行`)
-      .join('、')
 
-  const editLocatableNow = (beforeText: string) => {
-    const trimmed = beforeText.trim()
-    if (!trimmed) return false
-    if (workingSp.includes(trimmed)) return true
-    if (trimmed.length >= 8) return normalizeCompact(workingSp).includes(normalizeCompact(trimmed))
-    return false
+  // 位置列表点击 → 滚动到原文对应行并高亮
+  const jumpToLine = (lineIndex: number) => {
+    setHighlightLine(lineIndex)
+    const target = docContainerRef.current?.querySelector(`[data-line="${lineIndex}"]`)
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 
-  const renderEditCard = (edit: { before_text: string; after_text: string; note: string }, index: number) => {
-    const key = editKey(index)
-    const runtime = editRuntimes.get(key) ?? { state: 'pending' as EditState, effectiveAfter: edit.after_text }
-    const locatable = runtime.state === 'applied' || editLocatableNow(edit.before_text)
-    const editing = editingKey === key
-    return (
-      <div key={key} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-        <p className="text-xs leading-5 text-slate-600">{edit.note}</p>
-        <div className="mt-2 space-y-1.5 font-mono text-xs">
-          <div className="rounded bg-red-50 px-2 py-1.5 text-red-800 line-through decoration-red-300">
-            {edit.before_text}
-          </div>
-          {editing ? (
-            <textarea
-              className="w-full rounded border border-emerald-300 bg-white px-2 py-1.5 font-mono text-xs leading-5 text-emerald-900 outline-none focus:ring-2 focus:ring-emerald-200"
-              rows={3}
-              value={runtime.effectiveAfter}
-              onChange={(event) => onEditText(key, event.target.value)}
-            />
-          ) : (
-            <div className="rounded bg-emerald-50 px-2 py-1.5 text-emerald-800">{runtime.effectiveAfter}</div>
-          )}
-        </div>
-        {!isGroupFix ? (
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            {runtime.state === 'applied' ? (
-              <>
-                <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">
-                  <Check className="mr-1 h-3 w-3" />
-                  已应用
-                </Badge>
-                <button
-                  type="button"
-                  className="flex items-center gap-1 text-xs text-slate-500 underline decoration-dotted underline-offset-2"
-                  onClick={() => onRevertEdit([key])}
-                >
-                  <RotateCcw className="h-3 w-3" />
-                  撤销
-                </button>
-              </>
-            ) : runtime.state === 'ignored' ? (
-              <>
-                <Badge>已忽略</Badge>
-                <button
-                  type="button"
-                  className="text-xs text-slate-500 underline decoration-dotted underline-offset-2"
-                  onClick={() => onRevertEdit([key])}
-                >
-                  恢复
-                </button>
-              </>
-            ) : (
-              <>
-                <Button size="sm" onClick={() => { setEditingKey(null); onApplyEdit([key]) }} disabled={!locatable}>
-                  <Check className="h-3.5 w-3.5" />
-                  应用这一处
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setEditingKey(editing ? null : key)}
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                  {editing ? '完成编辑' : '编辑后应用'}
-                </Button>
-                <button
-                  type="button"
-                  className="text-xs text-slate-500 underline decoration-dotted underline-offset-2"
-                  onClick={() => onIgnoreEdit(key)}
-                >
-                  忽略
-                </button>
-                {!locatable ? (
-                  <span className="text-xs text-amber-700">原文已变化，无法自动应用，请手动处理</span>
-                ) : null}
-              </>
-            )}
-          </div>
-        ) : null}
-      </div>
-    )
-  }
+  // 排序后的位置清单（按行号顺序）
+  const orderedPositions = useMemo(
+    () => [...problem.positions].sort((a, b) => a.lineIndex - b.lineIndex),
+    [problem],
+  )
+
+  // 判定依据仅在"多处联合"时才有展示意义：单处问题不存在"为什么这几处算同一个问题"
+  const showJudgment = problem.positionRelation === 'joint' && problem.positions.length >= 2 && (problem.groupingLogic || problem.why)
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/40 p-4" onClick={onClose}>
@@ -427,8 +310,8 @@ function ProblemDetail({
         className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="overflow-y-auto">
-          {/* 问题说明：第一眼必须看到完整现象(problem.title现已要求包含现象+影响+后果三层)，其他元信息全部收进折叠区 */}
+        <div className="overflow-y-auto" ref={docContainerRef}>
+          {/* 问题说明：第一眼看到完整现象 */}
           <div className="border-b border-slate-200 px-6 py-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
@@ -439,13 +322,9 @@ function ProblemDetail({
                   ) : null}
                   {problem.isGlobal ? (
                     <Badge>整体问题</Badge>
-                  ) : problem.positionRelation ? (
-                    <Badge>
-                      {problem.positionRelation === 'joint'
-                        ? `${problem.positions.length} 处联合构成`
-                        : `${problem.positions.length} 处独立`}
-                    </Badge>
-                  ) : null}
+                  ) : (
+                    <Badge>{problem.positions.length} 处位置</Badge>
+                  )}
                 </div>
                 <p className="mt-2 text-base leading-7 text-slate-900">{problem.title}</p>
               </div>
@@ -455,7 +334,7 @@ function ProblemDetail({
             </div>
           </div>
 
-          {/* 应对思路：看完现象后紧接的“所以建议怎么改”，保留在主体信息里(不归入折叠)，因为这是用户真正关心的行动建议 */}
+          {/* 应对思路 */}
           {problem.actionSummary ? (
             <div className="border-b border-slate-200 px-6 py-4">
               <p className="text-sm leading-6 text-slate-800">
@@ -465,8 +344,31 @@ function ProblemDetail({
             </div>
           ) : null}
 
-          {/* 折叠的补充信息：为什么这几处合并+优先处理理由，都是“元信息”，默认收起，不抢占阅读第一视觉焦点 */}
-          {problem.groupingLogic || problem.why ? (
+          {/* 位置清单：按行号排序，一条=一个位置+该处的问题说明，点击跳转下方原文对应行 */}
+          {!problem.isGlobal && orderedPositions.length > 0 ? (
+            <div className="border-b border-slate-200 px-6 py-4">
+              <h3 className="text-sm font-semibold text-slate-950">涉及位置（{orderedPositions.length} 处）</h3>
+              <div className="mt-2 space-y-1.5">
+                {orderedPositions.map((position) => (
+                  <button
+                    key={position.lineIndex}
+                    type="button"
+                    className="flex w-full items-start gap-2.5 rounded-md border border-slate-200 px-3 py-2 text-left transition hover:border-slate-300 hover:bg-slate-50"
+                    onClick={() => jumpToLine(position.lineIndex)}
+                  >
+                    <span className="mt-0.5 shrink-0 rounded bg-red-50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-red-600">
+                      第 {position.lineIndex + 1} 行
+                    </span>
+                    <span className="min-w-0 flex-1 text-xs leading-5 text-slate-700">{position.reason}</span>
+                    <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {/* 判定依据：仅多处联合时展示(单处问题不存在"为什么这几处算同一个") */}
+          {showJudgment ? (
             <div className="border-b border-slate-100 px-6 py-2.5">
               <button
                 type="button"
@@ -490,91 +392,7 @@ function ProblemDetail({
             </div>
           ) : null}
 
-          {/* 修复方案 */}
-          {fixPlan ? (
-            <div className="border-b border-slate-200 px-6 py-4">
-              <h3 className="text-sm font-semibold text-slate-950">
-                具体修改
-                {isGroupFix ? (
-                  <span className="ml-2 text-xs font-normal text-purple-700">
-                    以下 {fixPlan.edits.length} 处必须作为一组应用
-                  </span>
-                ) : null}
-              </h3>
-              {isGroupFix && fixPlan.group_note ? (
-                <p className="mt-1 rounded-md bg-purple-50 px-3 py-2 text-xs leading-5 text-purple-800">
-                  {fixPlan.group_note}
-                </p>
-              ) : null}
-              {fixPlan.confidence_caveat ? (
-                <p className="mt-2 flex items-start gap-1.5 rounded-md bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  这个问题仅由单个模型提出（未获得交叉确认），下方修法仅供参考，建议人工复核后再应用。
-                </p>
-              ) : null}
-              {fixPlan.edits.length === 0 ? (
-                <p className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-600">
-                  {fixPlan.no_fix_reason ?? '此问题需要业务决策，无法给出文字级修复。'}
-                </p>
-              ) : (
-                <div className="mt-2 space-y-2">{fixPlan.edits.map(renderEditCard)}</div>
-              )}
-              {isGroupFix && fixPlan.edits.length > 0 ? (
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  {groupState === 'applied' ? (
-                    <>
-                      <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">
-                        <Check className="mr-1 h-3 w-3" />
-                        整组已应用
-                      </Badge>
-                      <button
-                        type="button"
-                        className="flex items-center gap-1 text-xs text-slate-500 underline decoration-dotted underline-offset-2"
-                        onClick={() => onRevertEdit(groupEditKeys)}
-                      >
-                        <RotateCcw className="h-3 w-3" />
-                        撤销整组
-                      </button>
-                    </>
-                  ) : groupState === 'ignored' ? (
-                    <>
-                      <Badge>整组已忽略</Badge>
-                      <button
-                        type="button"
-                        className="text-xs text-slate-500 underline decoration-dotted underline-offset-2"
-                        onClick={() => onRevertEdit(groupEditKeys)}
-                      >
-                        恢复
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <Button
-                        size="sm"
-                        onClick={() => onApplyEdit(groupEditKeys)}
-                        disabled={!fixPlan.edits.every((edit) => editLocatableNow(edit.before_text))}
-                      >
-                        <Check className="h-3.5 w-3.5" />
-                        应用整组修改
-                      </Button>
-                      <button
-                        type="button"
-                        className="text-xs text-slate-500 underline decoration-dotted underline-offset-2"
-                        onClick={() => groupEditKeys.forEach((key) => onIgnoreEdit(key))}
-                      >
-                        忽略整组
-                      </button>
-                      {!fixPlan.edits.every((edit) => editLocatableNow(edit.before_text)) ? (
-                        <span className="text-xs text-amber-700">部分原文已变化，无法整组应用</span>
-                      ) : null}
-                    </>
-                  )}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          {/* 原文（只标本问题位置） */}
+          {/* 原文（只标本问题位置，点击上方位置清单可跳转到这里） */}
           <div className="px-2 py-3 font-mono text-xs leading-6">
             {problem.isGlobal ? (
               <p className="px-4 py-4 text-center font-sans text-sm text-slate-500">
@@ -583,23 +401,21 @@ function ProblemDetail({
             ) : (
               locator.lines.map((line, index) => {
                 const position = positionLines.get(index)
-                const expanded = expandedLine === index
+                const highlighted = highlightLine === index
                 if (!position) {
                   return (
-                    <div key={index} className="flex gap-3 px-3">
+                    <div key={index} data-line={index} className="flex gap-3 px-3">
                       <span className="w-8 shrink-0 select-none text-right text-slate-300">{index + 1}</span>
                       <span className="whitespace-pre-wrap break-all text-slate-600">{line || ' '}</span>
                     </div>
                   )
                 }
                 return (
-                  <div key={index}>
-                    <button
-                      type="button"
-                      onClick={() => setExpandedLine(expanded ? null : index)}
+                  <div key={index} data-line={index}>
+                    <div
                       className={cn(
-                        'flex w-full gap-3 rounded px-3 text-left transition',
-                        expanded ? 'bg-red-100' : 'bg-red-50 hover:bg-red-100',
+                        'flex w-full gap-3 rounded px-3 transition',
+                        highlighted ? 'bg-amber-100 ring-2 ring-amber-400' : 'bg-red-50',
                       )}
                     >
                       <span className="w-8 shrink-0 select-none text-right font-semibold text-red-500">
@@ -608,53 +424,14 @@ function ProblemDetail({
                       <span className="min-w-0 flex-1 whitespace-pre-wrap break-all font-medium text-slate-900">
                         {line || ' '}
                       </span>
-                      {expanded ? (
-                        <ChevronDown className="mt-1 h-3 w-3 shrink-0 text-slate-500" />
-                      ) : (
-                        <ChevronRight className="mt-1 h-3 w-3 shrink-0 text-slate-500" />
-                      )}
-                    </button>
-                    {expanded ? (
-                      <div className="ml-11 mr-3 my-2 rounded-md border border-red-200 bg-white px-3 py-2.5 font-sans">
-                        {problem.positionRelation === 'joint' ? (
-                          <p className="mb-1.5 text-xs font-medium text-red-700">
-                            这一处与{otherLinesLabel(index) || '其他位置'}联合构成本问题：
-                          </p>
-                        ) : null}
-                        <p className="whitespace-pre-line text-xs leading-5 text-slate-700">{position.reason}</p>
-                      </div>
-                    ) : null}
+                    </div>
+                    <div className="ml-11 mr-3 my-1.5 rounded-md border border-red-100 bg-white px-3 py-2 font-sans">
+                      <p className="whitespace-pre-line text-xs leading-5 text-slate-600">{position.reason}</p>
+                    </div>
                   </div>
                 )
               })
             )}
-          </div>
-
-          {/* 原始检测数据入口（自审：砍掉侧滑面板后保留的核查通道） */}
-          <div className="border-t border-slate-100 px-6 py-3">
-            <button
-              type="button"
-              className="text-xs text-slate-400 underline decoration-dotted underline-offset-2 hover:text-slate-700"
-              onClick={() => setShowRawData((value) => !value)}
-            >
-              {showRawData ? '收起' : '查看'}原始检测数据（{problem.relatedIssues.length} 条记录）
-            </button>
-            {showRawData ? (
-              <div className="mt-2 space-y-2">
-                {problem.relatedIssues.map((issue) => (
-                  <button
-                    key={issue.id}
-                    type="button"
-                    className="block w-full rounded border border-slate-200 px-3 py-2 text-left text-xs text-slate-600 hover:bg-slate-50"
-                    onClick={() => onOpenIssue(issue)}
-                  >
-                    <span className="font-medium text-slate-800">{issue.title}</span>
-                    <span className="ml-2">可信度 {issue.confidence_display} · {issue.severity_display}</span>
-                    <span className="mt-1 block line-clamp-2">{issue.description}</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
           </div>
         </div>
       </div>
@@ -671,6 +448,7 @@ export function ReportView({
   onOpenIssue,
   onExportJson,
   onExportMarkdown,
+  onOpenFixWorkbench,
 }: ReportViewProps) {
   const locator = useMemo(() => makeLocator(targetSp), [targetSp])
   const { problems, referenceIssues } = useMemo(() => buildBigProblems(report, locator), [report, locator])
@@ -694,99 +472,6 @@ export function ReportView({
   const [showMinorNotes, setShowMinorNotes] = useState(false)
   const [showSecondaryProblems, setShowSecondaryProblems] = useState(false)
   const [expandedDocLine, setExpandedDocLine] = useState<number | null>(null)
-
-  // 修复应用状态：workingSp 是应用修改后的工作副本
-  const [workingSp, setWorkingSp] = useState(targetSp)
-  const [editRuntimes, setEditRuntimes] = useState<Map<string, EditRuntime>>(new Map())
-  const appliedCount = [...editRuntimes.values()].filter((runtime) => runtime.state === 'applied').length
-
-  const findEdit = (key: string) => {
-    const [priorityStr, indexStr] = key.split('-')
-    const plan = (report.fix_plans ?? []).find((item) => item.action_priority === Number(priorityStr))
-    return plan?.edits[Number(indexStr)]
-  }
-
-  const applyEdits = (keys: string[]) => {
-    setWorkingSp((current) => {
-      let next = current
-      for (const key of keys) {
-        const edit = findEdit(key)
-        if (!edit) continue
-        const runtime = editRuntimes.get(key)
-        const after = runtime?.effectiveAfter ?? edit.after_text
-        if (next.includes(edit.before_text)) {
-          next = next.replace(edit.before_text, after)
-        }
-      }
-      return next
-    })
-    setEditRuntimes((current) => {
-      const next = new Map(current)
-      for (const key of keys) {
-        const edit = findEdit(key)
-        if (!edit) continue
-        const existing = next.get(key)
-        next.set(key, { state: 'applied', effectiveAfter: existing?.effectiveAfter ?? edit.after_text })
-      }
-      return next
-    })
-  }
-
-  const revertEdits = (keys: string[]) => {
-    setWorkingSp((current) => {
-      let next = current
-      for (const key of keys) {
-        const edit = findEdit(key)
-        if (!edit) continue
-        const runtime = editRuntimes.get(key)
-        const after = runtime?.effectiveAfter ?? edit.after_text
-        if (runtime?.state === 'applied' && next.includes(after)) {
-          next = next.replace(after, edit.before_text)
-        }
-      }
-      return next
-    })
-    setEditRuntimes((current) => {
-      const next = new Map(current)
-      for (const key of keys) {
-        const edit = findEdit(key)
-        if (!edit) continue
-        next.set(key, { state: 'pending', effectiveAfter: next.get(key)?.effectiveAfter ?? edit.after_text })
-      }
-      return next
-    })
-  }
-
-  const ignoreEdit = (key: string) => {
-    const edit = findEdit(key)
-    if (!edit) return
-    setEditRuntimes((current) => {
-      const next = new Map(current)
-      next.set(key, { state: 'ignored', effectiveAfter: next.get(key)?.effectiveAfter ?? edit.after_text })
-      return next
-    })
-  }
-
-  const editText = (key: string, text: string) => {
-    const edit = findEdit(key)
-    if (!edit) return
-    setEditRuntimes((current) => {
-      const next = new Map(current)
-      const existing = next.get(key)
-      next.set(key, { state: existing?.state ?? 'pending', effectiveAfter: text })
-      return next
-    })
-  }
-
-  const exportModifiedSp = () => {
-    const blob = new Blob([workingSp], { type: 'text/plain;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = 'prompt-修改后.txt'
-    anchor.click()
-    URL.revokeObjectURL(url)
-  }
 
   const profile = report.document_profile
   const checkPlan = report.check_plan ?? []
@@ -843,7 +528,7 @@ export function ReportView({
       ) : null}
 
       {/* 体检卡：一句话理解 + 得分 + 雷达 */}
-      <section className="rounded-lg border border-slate-200 bg-white p-5">
+      <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100 p-5">
         <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
           <div className="min-w-0">
             <p className="text-base font-semibold leading-7 text-slate-950">{profile.document_purpose}</p>
@@ -911,7 +596,7 @@ export function ReportView({
       </section>
 
       {/* 结论 + 大问题列表（⑦ 倒金字塔：必改区在前、次要区折叠） */}
-      <section className="rounded-lg border border-slate-200 bg-white p-5">
+      <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100 p-5">
         <p className="text-sm leading-6 text-slate-700">{report.prescription.overall_assessment}</p>
 
         {problems.length === 0 ? (
@@ -982,7 +667,7 @@ export function ReportView({
       </section>
 
       {/* 完整原文（默认折叠） */}
-      <section className="rounded-lg border border-slate-200 bg-white">
+      <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100">
         <button
           type="button"
           className="flex w-full items-center gap-2 px-5 py-3 text-left"
@@ -1107,11 +792,11 @@ export function ReportView({
         </section>
       ) : null}
 
-      {/* 导出 */}
+      {/* 修改 + 导出 */}
       <section className="grid gap-2 md:grid-cols-3">
-        <Button type="button" variant={appliedCount > 0 ? 'primary' : 'secondary'} onClick={exportModifiedSp} disabled={appliedCount === 0}>
-          <Download className="h-4 w-4" />
-          导出修改后的 Prompt{appliedCount > 0 ? `（已应用 ${appliedCount} 处）` : ''}
+        <Button type="button" variant="primary" onClick={onOpenFixWorkbench}>
+          <Pencil className="h-4 w-4" />
+          生成修改方案
         </Button>
         <Button type="button" variant="secondary" onClick={onExportJson}>
           <Download className="h-4 w-4" />
@@ -1127,16 +812,8 @@ export function ReportView({
         <ProblemDetail
           key={detailProblem.key}
           problem={detailProblem}
-          report={report}
           locator={locator}
-          workingSp={workingSp}
-          editRuntimes={editRuntimes}
-          onApplyEdit={applyEdits}
-          onIgnoreEdit={ignoreEdit}
-          onRevertEdit={revertEdits}
-          onEditText={editText}
           onClose={() => setDetailKey(null)}
-          onOpenIssue={onOpenIssue}
         />
       ) : null}
     </div>

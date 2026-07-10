@@ -84,7 +84,7 @@ export function ModelSelector({
   }
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4">
+    <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100 p-4">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <KeyRound className="h-4 w-4 text-slate-500" />

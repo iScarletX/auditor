@@ -15,7 +15,7 @@ export function ScenarioHintInput({ value, onChange }: ScenarioHintInputProps) {
   const [open, setOpen] = useState(Boolean(value.trim()))
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white">
+    <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100">
       <button
         type="button"
         className="flex w-full items-center gap-2 px-4 py-3 text-left"

@@ -2,6 +2,7 @@ import { History, Play, ShieldCheck, Square, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ConsolidationModelPicker } from './components/ConsolidationModelPicker/ConsolidationModelPicker'
 import { DiffPreview } from './components/DiffPreview/DiffPreview'
+import { FixWorkbench } from './components/FixWorkbench/FixWorkbench'
 import { IssueDetailPanel } from './components/IssueDetailPanel/IssueDetailPanel'
 import { ReportView } from './components/ReportView/ReportView'
 import { ModelSelector } from './components/ModelSelector/ModelSelector'
@@ -14,6 +15,8 @@ import { applyFix } from './core/fixApplier/applyFix'
 import { generateDiff, type DiffResult } from './core/fixApplier/generateDiff'
 import { DEFAULT_MODELS, listOpenRouterModels } from './core/modelProvider/providerAdapter'
 import { runReview } from './core/orchestrator/runReview'
+import { generateFixPlans, strongestConfidenceOf, type ActionLocationHint, type FixPlan } from './core/orchestrator/fixPlanGenerator'
+import { selectConsolidationModel } from './core/orchestrator/consolidationModelSelector'
 import { calculateReviewScore } from './core/orchestrator/scoreCalculator'
 import { loadBuiltinSkills } from './core/skillLoader/loadBuiltinSkills'
 import { loadUserSkills } from './core/skillLoader/loadUserSkills'
@@ -224,7 +227,7 @@ function buildReportMarkdown(report: ReviewReport, targetSp: string) {
     ? `共发现 ${actions.length} 个优先问题：\u{1F534} 严重 ${severityCounts.严重} · \u{1F7E0} 中等 ${severityCounts.中等} · \u26AA 轻微 ${severityCounts.轻微}`
     : '本次未发现需优先处理的问题。'
 
-  return `# Butler 审查报告：${title}
+  return `# Arbiter 审查报告：${title}
 
 审查时间：${new Date(report.meta.timestamp).toLocaleString()}
 检查：${report.meta.skills_run.length} 项 · ${report.meta.models_used.length} 个模型交叉验证（调用完成 ${report.meta.actual_skill_model_calls}/${report.meta.expected_skill_model_calls}）
@@ -276,6 +279,12 @@ function App() {
   const [previewDiff, setPreviewDiff] = useState<DiffResult | null>(null)
   const [previewApply, setPreviewApply] = useState<(() => Promise<void>) | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  // 整体修改工作台：点击“生成修改方案”时才按需生成(传入完整位置清单要求逐位置覆盖)，生成后缓存
+  const [workbenchOpen, setWorkbenchOpen] = useState(false)
+  const [workbenchLoading, setWorkbenchLoading] = useState(false)
+  const [workbenchError, setWorkbenchError] = useState<string | null>(null)
+  const [workbenchPlans, setWorkbenchPlans] = useState<FixPlan[]>([])
+  const workbenchCacheKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -617,13 +626,121 @@ function App() {
     })
   }
 
+  /**
+   * 打开整体修改工作台：点击时才按需生成修复方案。
+   * 关键：把每个大问题关联的完整位置清单(locations)传给生成模型，要求逐位置覆盖，
+   * 从根本上解决“9处问题只给1条修改”的脱节。生成结果按reviewId缓存，重复打开不重复花钱。
+   */
+  const openFixWorkbench = async () => {
+    if (!report) return
+    setWorkbenchOpen(true)
+    const cacheKey = report.meta.review_id
+    if (workbenchCacheKeyRef.current === cacheKey && workbenchPlans.length > 0) return // 已生成过，直接展示缓存
+    setWorkbenchLoading(true)
+    setWorkbenchError(null)
+    try {
+      const apiKey = await loadDecryptedApiKey()
+      if (!apiKey) throw new Error('请先保存 API Key')
+      // 宽松包含匹配(与ReportView同一套逻辑)：防止B2简化id导致关联issue丢失
+      const findIssue = (id: string) =>
+        report.issues.find(
+          (issue) =>
+            issue.id === id ||
+            issue.locations.some((location) => location.source_issue_id === id) ||
+            (id.length >= 8 && (issue.id.includes(id) || id.includes(issue.id))),
+        )
+      const locationHints: ActionLocationHint[] = report.prescription.priority_actions.map((action) => ({
+        action_priority: action.priority,
+        locations: action.related_issue_ids
+          .map(findIssue)
+          .filter((issue): issue is IssueGroup => Boolean(issue))
+          .flatMap((issue) =>
+            issue.locations
+              .filter((location) => (location.matched_text ?? '').trim())
+              .map((location) => ({
+                matched_text: location.matched_text ?? '',
+                reason: location.reason?.trim() || issue.description,
+              })),
+          ),
+      }))
+      const confidenceByPriority = new Map(
+        report.prescription.priority_actions.map((action) => {
+          const relatedGroups = action.related_issue_ids
+            .map(findIssue)
+            .filter((issue): issue is IssueGroup => Boolean(issue))
+          return [action.priority, strongestConfidenceOf(relatedGroups.map((group) => group.confidence_display))] as const
+        }),
+      )
+      const consolidationSelection = selectConsolidationModel({
+        selectedModels: models.filter((model) => model.selected),
+        manualModelId: manualConsolidationModelId,
+        manualModelCandidates: availableModels,
+      })
+      const plans = await generateFixPlans({
+        targetSp,
+        documentProfile: report.document_profile,
+        prescription: report.prescription,
+        confidenceByPriority,
+        locationHints,
+        model: consolidationSelection.model,
+        apiKey,
+        reviewId: report.meta.review_id,
+      })
+      setWorkbenchPlans(plans)
+      workbenchCacheKeyRef.current = cacheKey
+    } catch (fixError) {
+      setWorkbenchError(fixError instanceof Error ? fixError.message : '生成修改方案失败')
+    } finally {
+      setWorkbenchLoading(false)
+    }
+  }
+
   const exportReportJson = () => {
     if (!report) return
     const date = localDateForFilename(report.meta.timestamp)
     const summary = promptSummaryForFilename(targetSp, report)
+    // JSON导出与MD同目标：只输出用户关心的问题内容本身，不包含raw_model_outputs等内部调试字段
+    const score = calculateReviewScore({
+      issues: report.issues,
+      checkPlan: report.check_plan ?? [],
+      documentProfile: report.document_profile,
+      scenarioHint: report.meta.scenario_hint,
+      targetSp,
+      fallbackSkillsRun: report.meta.skills_run,
+    })
+    const cleanExport = {
+      审查时间: new Date(report.meta.timestamp).toLocaleString(),
+      文档理解: {
+        用途: report.document_profile.document_purpose,
+        输出给: report.document_profile.output_consumer,
+      },
+      体检得分: {
+        总分: score.total,
+        各维度: score.dimensions.map((dim) => ({
+          维度: dim.label,
+          分数: dim.score,
+          权重: dim.weight,
+        })),
+        做得好: score.strengths,
+        待改进: score.weaknesses,
+      },
+      主要问题: report.prescription.priority_actions.map((action) => ({
+        优先级: action.priority,
+        问题现象: action.problem_statement,
+        应对思路: action.action_summary,
+        优先处理理由: action.why,
+        问题性质: action.nature ? NATURE_TEXT[action.nature] ?? action.nature : null,
+        为什么这几处是同一个问题: action.grouping_logic || null,
+        矛盾裁决: action.conflicts_resolved || null,
+      })),
+      次要建议: report.prescription.minor_notes,
+      仅供参考的单模型意见: report.issues
+        .filter((issue) => issue.confidence_display === '仅供参考')
+        .map((issue) => ({ 标题: issue.title, 说明: issue.description.split('\n')[0] })),
+    }
     downloadTextFile(
       `butler-report-${date}-${summary}.json`,
-      `${JSON.stringify(report, null, 2)}\n`,
+      `${JSON.stringify(cleanExport, null, 2)}\n`,
       'application/json;charset=utf-8',
     )
   }
@@ -659,15 +776,15 @@ function App() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 text-slate-950">
-      <header className="border-b border-slate-200 bg-white">
+    <main className="min-h-screen text-slate-950">
+      <header className="border-b border-indigo-100/60 bg-white/70 backdrop-blur-md">
         <div className="mx-auto flex max-w-[1540px] items-center gap-3 px-4 py-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-950 text-white">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-600 via-blue-600 to-sky-500 text-white shadow-md shadow-indigo-200">
             <ShieldCheck className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold tracking-normal text-slate-950">Butler</h1>
-            <p className="text-sm text-slate-500">System Prompt 审查工作台</p>
+            <h1 className="bg-gradient-to-r from-indigo-700 via-blue-700 to-sky-600 bg-clip-text text-lg font-bold tracking-tight text-transparent">Arbiter</h1>
+            <p className="text-sm text-slate-500">AI 指令审查工作台 · Prompt / Skill</p>
           </div>
         </div>
       </header>
@@ -743,10 +860,11 @@ function App() {
               onOpenIssue={setDetailIssue}
               onExportJson={exportReportJson}
               onExportMarkdown={exportReportMarkdown}
+              onOpenFixWorkbench={() => void openFixWorkbench()}
             />
           ) : null}
 
-          <section className="rounded-lg border border-slate-200 bg-white p-4">
+          <section className="rounded-xl border border-slate-200/70 bg-white shadow-sm shadow-slate-100 p-4">
             <div className="mb-3 flex items-center gap-2">
               <History className="h-4 w-4 text-slate-500" />
               <h2 className="text-sm font-semibold text-slate-950">历史记录</h2>
@@ -801,6 +919,17 @@ function App() {
           setPreviewApply(null)
         }}
       />
+
+      {workbenchOpen && report ? (
+        <FixWorkbench
+          targetSp={targetSp}
+          fixPlans={workbenchPlans}
+          actions={report.prescription.priority_actions}
+          loading={workbenchLoading}
+          error={workbenchError}
+          onClose={() => setWorkbenchOpen(false)}
+        />
+      ) : null}
     </main>
   )
 }
