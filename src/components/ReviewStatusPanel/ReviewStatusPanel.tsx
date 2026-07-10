@@ -27,12 +27,14 @@ function interactionModeLabel(value: ReviewReport['document_profile']['interacti
 }
 
 function findRelatedIssues(report: ReviewReport, action: PrescriptionPriorityAction) {
+  // 与ReportView.tsx里findIssue同样的宽松匹配逻辑：防止B2自行简化id导致精确匹配失败时静默丢失关联issue
   return action.related_issue_ids
     .map((id) => ({
       id,
       issue: report.issues.find((issue) =>
         issue.id === id ||
-        issue.locations.some((location) => location.source_issue_id === id),
+        issue.locations.some((location) => location.source_issue_id === id) ||
+        (id.length >= 8 && (issue.id.includes(id) || id.includes(issue.id))),
       ),
     }))
 }

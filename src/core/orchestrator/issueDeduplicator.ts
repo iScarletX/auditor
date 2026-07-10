@@ -550,8 +550,16 @@ export async function deduplicateIssues(
   foundIssues
     .filter((issue) => !used.has(issue))
     .forEach((issue) => {
+      // 若skill_id本身已以issue.id作为后缀结尾(如skill_id='05_robustness_injection_defense'、
+      // issue.id='injection_defense'，是 LLM 填 issue.id 时取了 skill 名字的末段词根——实测很常见)，
+      // 直接用skill_id就能完整表达，不再重复拼接issue.id，避免产生 `group-xxx-xxx` 这种双重词根的
+      // 怪异id——这类id很容易让B2汇总阶段的LLM在引用related_issue_ids时“自作聊明”地简化掉重复部分，
+      // 导致与真实id对不上、这条issue在前端展示时静默丢失。
+      const groupId = issue.skill_id.endsWith(issue.id) || issue.id === issue.skill_id
+        ? `group-${issue.skill_id}`
+        : `group-${issue.skill_id}-${issue.id}`
       groups.push(makeGroup({
-        id: `group-${issue.skill_id}-${issue.id}`,
+        id: groupId,
         mergeType: 'single',
         title: skillTitle(skillMap, issue.skill_id),
         issues: [issue],

@@ -513,9 +513,15 @@ async function runReviewInternal(
     errors: [...allErrors],
   })
   // S4-⑥守门员：为每个大问题计算关联issue的最强证据强度，供修法生成时矛盾裁决+往修法附加confidence_caveat标记
+  // 宽松包含匹配：B2汇总阶段有时会自行简化related_issue_ids里的id(比如把 group-05_xxx-yyy 弄成 group-05_xxx)，
+  // 若只做精确匹配会导致findGroupByIssueId找不到，进而让下游fixPlanGenerator拿到错误的confidence或缺失上下文，
+  // 是导致“具体修改内容与问题无关”这类错配现象的根源之一。
   const findGroupByIssueId = (id: string) =>
     finalIssues.find(
-      (group) => group.id === id || group.locations.some((location) => location.source_issue_id === id),
+      (group) =>
+        group.id === id ||
+        group.locations.some((location) => location.source_issue_id === id) ||
+        (id.length >= 8 && (group.id.includes(id) || id.includes(group.id))),
     )
   const confidenceByPriority = new Map(
     prescription.priority_actions.map((action) => {

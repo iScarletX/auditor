@@ -136,9 +136,16 @@ function buildBigProblems(report: ReviewReport, locator: Locator) {
   const referenceIssues = report.issues.filter((issue) => !isConfirmedIssue(issue))
   const confirmed = report.issues.filter(isConfirmedIssue)
 
+  // B2汇总阶段的LLM有时会对related_issue_ids里的id自行简化(比如把 group-05_xxx-yyy 简化成 group-05_xxx)，
+  // 导致与issue.id字符串完全一致才能命中的精确匹配会静默丢失这条issue（实测已确证会导致“N处联合”与
+  // 实际展示的位置数差很大）。加一层宽松包含关系兼容：若精确匹配失败，再尝试互相包含(只要
+  // 一方是对方的完整字符串子串，不是巧合部分重合)。
   const findIssue = (id: string) =>
     report.issues.find(
-      (issue) => issue.id === id || issue.locations.some((location) => location.source_issue_id === id),
+      (issue) =>
+        issue.id === id ||
+        issue.locations.some((location) => location.source_issue_id === id) ||
+        (id.length >= 8 && (issue.id.includes(id) || id.includes(issue.id))),
     )
 
   const issuePositions = (issue: IssueGroup): ProblemPosition[] => {

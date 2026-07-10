@@ -47,7 +47,7 @@ export interface FixPlan {
 
 const FIX_PLAN_SYSTEM_PROMPT = `Butler修复方案生成阶段（S4-⑥ 守门员）
 
-你会收到target_sp全文、document_profile、和一组已确认的大问题（每个含说明、关联原文位置、证据强度confidence、已裁决矛盾简述conflicts_resolved）。你的任务是为每个大问题生成可直接应用的文字级修复方案。
+你会收到target_sp全文、document_profile、和一组已确认的大问题（每个含problem_statement现象描述、action_summary建议改法、关联原文位置、证据强度confidence、已裁决矛盾简述conflicts_resolved）。必须先通读problem_statement确认“现在具体错在哪里”，再参考action_summary确认“应该改成什么样”，两者都要结合才能准确定位到该改哪段原文、改成什么。你的任务是为每个大问题生成可直接应用的文字级修复方案。
 
 硬规则：
 1. 每个edit的before_text必须逐字摘自target_sp原文，一字不差，包括标点和空格。系统会校验，对不上会被丢弃。
@@ -157,9 +157,13 @@ function buildUserPrompt(params: {
   prescription: ReviewPrescription
   confidenceByPriority: Map<number, ConfidenceDisplay>
 }) {
+  // 重要修复：之前problem字段错用action_summary(改法/目的)充当，导致修复方案生成阶段从未看到过“现象本身是什么”，
+  // 只能凭一句模粧的“应该改成什么”去推测原文位置，容易找错before_text、生成与问题不相关的修改。
+  // 现同时传递problem_statement(现象)与action_summary(改法)，让修复方案生成时先看懂“哪里错了”再根据改法写具体edit。
   const actionsPayload = params.actions.map((action) => ({
     priority: action.priority,
-    problem: action.action_summary,
+    problem_statement: action.problem_statement,
+    action_summary: action.action_summary,
     why: action.why,
     nature: action.nature ?? null,
     position_relation: action.position_relation ?? null,
